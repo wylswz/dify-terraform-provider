@@ -2,10 +2,13 @@
 
 A Terraform provider for managing [Dify](https://dify.ai) applications, model provider credentials, plugins, and API keys as infrastructure-as-code.
 
+**Important**: This provider requires the Dify backend to be running on the `demo/tf` branch from [wylswz/dify](https://github.com/wylswz/dify/tree/demo/tf), which includes the provisioning API endpoints for tool provider credentials.
+
 ## Requirements
 
 - [Terraform](https://www.terraform.io/downloads.html) >= 1.0
 - [Go](https://go.dev/dl/) >= 1.22 (to build the provider)
+- Dify backend on the `demo/tf` branch from [wylswz/dify](https://github.com/wylswz/dify/tree/demo/tf)
 
 ## Quick Start
 
