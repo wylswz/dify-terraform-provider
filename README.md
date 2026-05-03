@@ -68,17 +68,49 @@ Manages model provider credentials (e.g. OpenAI API key, Anthropic API key).
 
 ```hcl
 resource "dify_model_provider_credential" "openai" {
-  provider = "openai"
-  name     = "production-key"
+  provider_name = "openai"
+  name          = "production-key"
   credentials = {
-    api_key = "sk-..."
+    openai_api_key = "sk-..."
   }
 }
 ```
 
 | Attribute | Type | Description |
 |---|---|---|
-| `provider` | String (required) | Model provider name (e.g. `openai`, `anthropic`) |
+| `provider_name` | String (required) | Model provider name (e.g. `openai`, `anthropic`) |
+| `credentials` | Map (required) | Credential key-value pairs |
+| `name` | String (optional) | Human-readable name |
+| `credential_id` | String (computed) | Credential ID |
+
+### `dify_tool_provider_credential`
+
+Manages builtin tool provider credentials (e.g. Tavily API key, Google Search API key).
+
+**Important**: For plugin-based tool providers, `provider_name` must use the full format (e.g. `langgenius/tavily/tavily`), not just the short name. You can find the correct provider name via the `dify_plugins` data source.
+
+```hcl
+# Install the plugin first
+resource "dify_plugin_install" "tavily" {
+  plugin_unique_identifier = "langgenius/tavily:0.1.7@5fce9cf01fecda9ad92e5125397d2bb5497429baed276c7f14f033e7debd0abe"
+  source                   = "marketplace"
+}
+
+# Then configure credentials
+resource "dify_tool_provider_credential" "tavily" {
+  provider_name = "langgenius/tavily/tavily"
+  name          = "production-key"
+  credentials = {
+    tavily_api_key = "tvly-..."
+  }
+
+  depends_on = [dify_plugin_install.tavily]
+}
+```
+
+| Attribute | Type | Description |
+|---|---|---|
+| `provider_name` | String (required) | Tool provider name (use full format for plugins: `langgenius/tavily/tavily`) |
 | `credentials` | Map (required) | Credential key-value pairs |
 | `name` | String (optional) | Human-readable name |
 | `credential_id` | String (computed) | Credential ID |
