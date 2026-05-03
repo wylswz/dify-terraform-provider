@@ -5,15 +5,16 @@ package provider
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"time"
 
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
-	"github.com/hashicorp/terraform-plugin-framework/resource/schema/mapplanmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/planmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringplanmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/types"
+	"github.com/hashicorp/terraform-plugin-log/tflog"
 )
 
 var _ resource.Resource = &DatasetDocumentResource{}
@@ -33,11 +34,12 @@ type DatasetDocumentResourceModel struct {
 	DatasetID              types.String `tfsdk:"dataset_id"`
 	Name                   types.String `tfsdk:"name"`
 	DataSourceType         types.String `tfsdk:"data_source_type"`
-	DataSourceInfo         types.Map    `tfsdk:"data_source_info"`
+	DataSourceInfo         types.String `tfsdk:"data_source_info"`
 	IndexingStatus         types.String `tfsdk:"indexing_status"`
 	IndexingTechnique      types.String `tfsdk:"indexing_technique"`
 	EmbeddingModel         types.String `tfsdk:"embedding_model"`
 	EmbeddingModelProvider types.String `tfsdk:"embedding_model_provider"`
+	CreatorEmail           types.String `tfsdk:"creator_email"`
 }
 
 func (r *DatasetDocumentResource) Metadata(ctx context.Context, req resource.MetadataRequest, resp *resource.MetadataResponse) {
@@ -75,12 +77,11 @@ func (r *DatasetDocumentResource) Schema(ctx context.Context, req resource.Schem
 					stringplanmodifier.RequiresReplace(),
 				},
 			},
-			"data_source_info": schema.MapAttribute{
-				MarkdownDescription: "Data source content (e.g., `text_content` for text type, or file content for upload).",
-				ElementType:         types.DynamicType,
+			"data_source_info": schema.StringAttribute{
+				MarkdownDescription: "Data source content as a JSON string (e.g., `jsonencode({text_content = \"hello\"})` or `jsonencode({file_name = \"doc.pdf\", file_content = filebase64(\"doc.pdf\")})`).",
 				Required:            true,
-				PlanModifiers: []planmodifier.Map{
-					mapplanmodifier.RequiresReplace(),
+				PlanModifiers: []planmodifier.String{
+					stringplanmodifier.RequiresReplace(),
 				},
 			},
 			"indexing_status": schema.StringAttribute{
@@ -90,14 +91,21 @@ func (r *DatasetDocumentResource) Schema(ctx context.Context, req resource.Schem
 			"indexing_technique": schema.StringAttribute{
 				MarkdownDescription: "Indexing technique (defaults to dataset's technique if not specified).",
 				Optional:            true,
+				Computed:            true,
 			},
 			"embedding_model": schema.StringAttribute{
-				MarkdownDescription: "Embedding model name (required for high_quality indexing).",
+				MarkdownDescription: "Embedding model name (required for high_quality indexing). The server may normalize this.",
 				Optional:            true,
+				Computed:            true,
 			},
 			"embedding_model_provider": schema.StringAttribute{
-				MarkdownDescription: "Embedding model provider (required for high_quality indexing).",
+				MarkdownDescription: "Embedding model provider (required for high_quality indexing). The server may normalize this.",
 				Optional:            true,
+				Computed:            true,
+			},
+			"creator_email": schema.StringAttribute{
+				MarkdownDescription: "Email of the account that will own this document (must be an active account in the workspace).",
+				Required:            true,
 			},
 		},
 	}
@@ -128,10 +136,11 @@ func (r *DatasetDocumentResource) Create(ctx context.Context, req resource.Creat
 		return
 	}
 
-	// Convert types.Map to map[string]any for data_source_info
-	dataSourceInfoMap := make(map[string]any)
-	for k, v := range data.DataSourceInfo.Elements() {
-		dataSourceInfoMap[k] = v
+	// Parse data_source_info JSON string into map[string]any
+	var dataSourceInfoMap map[string]any
+	if err := json.Unmarshal([]byte(data.DataSourceInfo.ValueString()), &dataSourceInfoMap); err != nil {
+		resp.Diagnostics.AddError("Invalid data_source_info", fmt.Sprintf("Unable to parse data_source_info JSON: %s", err))
+		return
 	}
 
 	createReq := DatasetDocumentCreateRequest{
@@ -140,6 +149,7 @@ func (r *DatasetDocumentResource) Create(ctx context.Context, req resource.Creat
 		IndexingTechnique:      data.IndexingTechnique.ValueString(),
 		EmbeddingModel:         data.EmbeddingModel.ValueString(),
 		EmbeddingModelProvider: data.EmbeddingModelProvider.ValueString(),
+		CreatorEmail:           data.CreatorEmail.ValueString(),
 	}
 
 	document, err := r.client.CreateDatasetDocument(ctx, data.DatasetID.ValueString(), createReq)
@@ -147,18 +157,18 @@ func (r *DatasetDocumentResource) Create(ctx context.Context, req resource.Creat
 		resp.Diagnostics.AddError("Client Error", fmt.Sprintf("Unable to create document: %s", err))
 		return
 	}
+	tflog.Debug(ctx, fmt.Sprintf("Created document: ID=%s, Name=%s, IndexingStatus=%q, DataSourceType=%s", document.ID, document.Name, document.IndexingStatus, document.DataSourceType))
 
 	data.ID = types.StringValue(document.ID)
-	data.DatasetID = types.StringValue(document.DatasetID)
+	// DocumentResponse does not include dataset_id; preserve from plan
 	data.Name = types.StringValue(document.Name)
-	data.DataSourceType = types.StringValue(document.DataSourceType)
 	data.IndexingStatus = types.StringValue(document.IndexingStatus)
-	data.IndexingTechnique = types.StringValue(document.IndexingTechnique)
-	data.EmbeddingModel = types.StringValue(document.EmbeddingModel)
-	data.EmbeddingModelProvider = types.StringValue(document.EmbeddingModelProvider)
+	// data_source_type: backend converts "text" → "upload_file" internally; preserve user input
+	// indexing_technique, embedding_model, embedding_model_provider: not in DocumentResponse; preserve from plan
 
-	// Set data_source_info from request
-	data.DataSourceInfo, _ = types.MapValueFrom(ctx, types.DynamicType, dataSourceInfoMap)
+	// Set data_source_info from request as JSON string
+	dataSourceInfoJSON, _ := json.Marshal(dataSourceInfoMap)
+	data.DataSourceInfo = types.StringValue(string(dataSourceInfoJSON))
 
 	// Poll for indexing completion
 	for i := 0; i < 300; i++ {
@@ -171,10 +181,12 @@ func (r *DatasetDocumentResource) Create(ctx context.Context, req resource.Creat
 
 		doc, err := r.client.GetDatasetDocument(ctx, data.DatasetID.ValueString(), document.ID)
 		if err != nil {
+			tflog.Warn(ctx, fmt.Sprintf("Poll %d: GetDatasetDocument error: %v", i, err))
 			continue
 		}
 
 		data.IndexingStatus = types.StringValue(doc.IndexingStatus)
+		tflog.Debug(ctx, fmt.Sprintf("Poll %d: indexing_status=%q, doc.ID=%s", i, doc.IndexingStatus, doc.ID))
 
 		if doc.IndexingStatus == "completed" {
 			break
@@ -207,13 +219,11 @@ func (r *DatasetDocumentResource) Read(ctx context.Context, req resource.ReadReq
 	}
 
 	data.ID = types.StringValue(document.ID)
-	data.DatasetID = types.StringValue(document.DatasetID)
+	// DocumentResponse does not include dataset_id; preserve from state
 	data.Name = types.StringValue(document.Name)
-	data.DataSourceType = types.StringValue(document.DataSourceType)
 	data.IndexingStatus = types.StringValue(document.IndexingStatus)
-	data.IndexingTechnique = types.StringValue(document.IndexingTechnique)
-	data.EmbeddingModel = types.StringValue(document.EmbeddingModel)
-	data.EmbeddingModelProvider = types.StringValue(document.EmbeddingModelProvider)
+	// data_source_type, indexing_technique, embedding_model, embedding_model_provider:
+	// not reliably in DocumentResponse; preserve from state
 
 	resp.Diagnostics.Append(resp.State.Set(ctx, &data)...)
 }

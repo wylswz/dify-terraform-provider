@@ -34,6 +34,11 @@ variable "dify_workspace_id" {
   type = string
 }
 
+variable "creator_email" {
+  type        = string
+  description = "Email of the active account in the Dify workspace that will own datasets and documents"
+}
+
 
 # ---------------------------------------------------------------------------
 # Step 1: Install the OpenAI model plugin from marketplace
@@ -83,7 +88,7 @@ resource "dify_tool_provider_credential" "tavily" {
 # Depends on credentials being configured so the app can reference models.
 # ---------------------------------------------------------------------------
 resource "dify_app" "my_workflow" {
-  creator_email = "yunlu.wen@dify.ai"
+  creator_email = var.creator_email
   dsl_yaml      = file("dsls/test.yml")
   name          = "My Workflow"
   description   = "A workflow managed by Terraform"
@@ -110,16 +115,17 @@ resource "dify_dataset" "my_dataset" {
   name                = "My Knowledge Base"
   description         = "Documentation dataset"
   indexing_technique  = "high_quality"
-  permission          = "all_members"
-  process_rule = {
+  permission          = "all_team_members"
+  process_rule = jsonencode({
     mode  = "automatic"
     rules = {
       chunk_size = 500
       overlap    = 50
     }
-  }
-  embedding_model         = "text-embedding-3-small"
-  embedding_model_provider = "openai"
+  })
+  embedding_model         = "text-embedding-3-large"
+  embedding_model_provider = "langgenius/openai/openai"
+  creator_email           = var.creator_email
 
   depends_on = [dify_model_provider_credential.openai]
 }
@@ -134,31 +140,13 @@ resource "dify_dataset" "my_dataset" {
 resource "dify_dataset_document" "doc_text" {
   dataset_id              = dify_dataset.my_dataset.id
   data_source_type        = "text"
-  data_source_info = {
+  data_source_info = jsonencode({
     text_content = file("knowledge/doc.md")
-  }
+  })
   indexing_technique      = "high_quality"
-  embedding_model         = "text-embedding-3-small"
-  embedding_model_provider = "openai"
-
-  depends_on = [
-    dify_dataset.my_dataset,
-    dify_model_provider_credential.openai
-  ]
-}
-
-# Example: Upload a file from the local filesystem
-# Note: The file content is read using the file() function at Terraform plan time
-resource "dify_dataset_document" "doc_file" {
-  dataset_id              = dify_dataset.my_dataset.id
-  data_source_type        = "upload_file"
-  data_source_info = {
-    file_name = "example.pdf"
-    file_content = filebase64("files/example.pdf")
-  }
-  indexing_technique      = "high_quality"
-  embedding_model         = "text-embedding-3-small"
-  embedding_model_provider = "openai"
+  embedding_model         = "text-embedding-3-large"
+  embedding_model_provider = "langgenius/openai/openai"
+  creator_email           = var.creator_email
 
   depends_on = [
     dify_dataset.my_dataset,

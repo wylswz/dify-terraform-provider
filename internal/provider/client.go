@@ -597,6 +597,7 @@ type DatasetCreateRequest struct {
 	ProcessRule            map[string]any `json:"process_rule,omitempty"`
 	EmbeddingModel         string         `json:"embedding_model,omitempty"`
 	EmbeddingModelProvider string         `json:"embedding_model_provider,omitempty"`
+	CreatorEmail           string         `json:"creator_email"`
 }
 
 // DatasetUpdateRequest is the payload for updating a dataset.
@@ -708,6 +709,7 @@ type DatasetDocumentCreateRequest struct {
 	IndexingTechnique      string         `json:"indexing_technique,omitempty"`
 	EmbeddingModel         string         `json:"embedding_model,omitempty"`
 	EmbeddingModelProvider string         `json:"embedding_model_provider,omitempty"`
+	CreatorEmail           string         `json:"creator_email"`
 }
 
 // GetDatasetDocument retrieves a document by ID.

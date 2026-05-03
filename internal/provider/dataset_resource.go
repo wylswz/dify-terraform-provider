@@ -5,6 +5,7 @@ package provider
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 
 	"github.com/hashicorp/terraform-plugin-framework/resource"
@@ -27,14 +28,15 @@ type DatasetResource struct {
 
 // DatasetResourceModel describes the resource data model.
 type DatasetResourceModel struct {
-	ID                    types.String `tfsdk:"id"`
-	Name                  types.String `tfsdk:"name"`
-	Description           types.String `tfsdk:"description"`
-	IndexingTechnique     types.String `tfsdk:"indexing_technique"`
-	Permission            types.String `tfsdk:"permission"`
-	ProcessRule           types.Map    `tfsdk:"process_rule"`
-	EmbeddingModel        types.String `tfsdk:"embedding_model"`
+	ID                     types.String `tfsdk:"id"`
+	Name                   types.String `tfsdk:"name"`
+	Description            types.String `tfsdk:"description"`
+	IndexingTechnique      types.String `tfsdk:"indexing_technique"`
+	Permission             types.String `tfsdk:"permission"`
+	ProcessRule            types.String `tfsdk:"process_rule"`
+	EmbeddingModel         types.String `tfsdk:"embedding_model"`
 	EmbeddingModelProvider types.String `tfsdk:"embedding_model_provider"`
+	CreatorEmail           types.String `tfsdk:"creator_email"`
 }
 
 func (r *DatasetResource) Metadata(ctx context.Context, req resource.MetadataRequest, resp *resource.MetadataResponse) {
@@ -67,21 +69,26 @@ func (r *DatasetResource) Schema(ctx context.Context, req resource.SchemaRequest
 				Optional:            true,
 			},
 			"permission": schema.StringAttribute{
-				MarkdownDescription: "Dataset permission: `only_me` or `all_members`.",
+				MarkdownDescription: "Dataset permission: `only_me`, `all_team_members`, or `partial_members`.",
 				Optional:            true,
 			},
-			"process_rule": schema.MapAttribute{
-				MarkdownDescription: "Chunking strategy configuration (e.g., mode, rules with chunk_size, overlap).",
-				ElementType:         types.DynamicType,
+			"process_rule": schema.StringAttribute{
+				MarkdownDescription: "Chunking strategy configuration as a JSON string (e.g., `jsonencode({mode = \"automatic\", rules = {chunk_size = 500}})`).",
 				Optional:            true,
 			},
 			"embedding_model": schema.StringAttribute{
-				MarkdownDescription: "Embedding model name (required for high_quality indexing).",
+				MarkdownDescription: "Embedding model name (required for high_quality indexing). The server may normalize this to the default model.",
 				Optional:            true,
+				Computed:            true,
 			},
 			"embedding_model_provider": schema.StringAttribute{
-				MarkdownDescription: "Embedding model provider (required for high_quality indexing).",
+				MarkdownDescription: "Embedding model provider (required for high_quality indexing). The server may normalize this value.",
 				Optional:            true,
+				Computed:            true,
+			},
+			"creator_email": schema.StringAttribute{
+				MarkdownDescription: "Email of the account that will own this dataset (must be an active account in the workspace).",
+				Required:            true,
 			},
 		},
 	}
@@ -112,23 +119,24 @@ func (r *DatasetResource) Create(ctx context.Context, req resource.CreateRequest
 		return
 	}
 
-	// Convert types.Map to map[string]any for process_rule
+	// Parse process_rule JSON string into map[string]any
 	var processRuleMap map[string]any
 	if !data.ProcessRule.IsNull() && !data.ProcessRule.IsUnknown() {
-		processRuleMap = make(map[string]any)
-		for k, v := range data.ProcessRule.Elements() {
-			processRuleMap[k] = v
+		if err := json.Unmarshal([]byte(data.ProcessRule.ValueString()), &processRuleMap); err != nil {
+			resp.Diagnostics.AddError("Invalid process_rule", fmt.Sprintf("Unable to parse process_rule JSON: %s", err))
+			return
 		}
 	}
 
 	createReq := DatasetCreateRequest{
-		Name:                  data.Name.ValueString(),
-		Description:           data.Description.ValueString(),
-		IndexingTechnique:     data.IndexingTechnique.ValueString(),
-		Permission:            data.Permission.ValueString(),
-		ProcessRule:           processRuleMap,
-		EmbeddingModel:        data.EmbeddingModel.ValueString(),
+		Name:                   data.Name.ValueString(),
+		Description:            data.Description.ValueString(),
+		IndexingTechnique:      data.IndexingTechnique.ValueString(),
+		Permission:             data.Permission.ValueString(),
+		ProcessRule:            processRuleMap,
+		EmbeddingModel:         data.EmbeddingModel.ValueString(),
 		EmbeddingModelProvider: data.EmbeddingModelProvider.ValueString(),
+		CreatorEmail:           data.CreatorEmail.ValueString(),
 	}
 
 	dataset, err := r.client.CreateDataset(ctx, createReq)
@@ -149,9 +157,10 @@ func (r *DatasetResource) Create(ctx context.Context, req resource.CreateRequest
 	data.EmbeddingModel = types.StringValue(dataset.EmbeddingModel)
 	data.EmbeddingModelProvider = types.StringValue(dataset.EmbeddingModelProvider)
 
-	// Set process_rule from response
+	// Set process_rule from response as JSON string
 	if dataset.ProcessRule != nil {
-		data.ProcessRule, _ = types.MapValueFrom(ctx, types.DynamicType, dataset.ProcessRule)
+		processRuleJSON, _ := json.Marshal(dataset.ProcessRule)
+		data.ProcessRule = types.StringValue(string(processRuleJSON))
 	}
 
 	resp.Diagnostics.Append(resp.State.Set(ctx, &data)...)
@@ -183,9 +192,10 @@ func (r *DatasetResource) Read(ctx context.Context, req resource.ReadRequest, re
 	data.EmbeddingModel = types.StringValue(dataset.EmbeddingModel)
 	data.EmbeddingModelProvider = types.StringValue(dataset.EmbeddingModelProvider)
 
-	// Set process_rule from response
+	// Set process_rule from response as JSON string
 	if dataset.ProcessRule != nil {
-		data.ProcessRule, _ = types.MapValueFrom(ctx, types.DynamicType, dataset.ProcessRule)
+		processRuleJSON, _ := json.Marshal(dataset.ProcessRule)
+		data.ProcessRule = types.StringValue(string(processRuleJSON))
 	}
 
 	resp.Diagnostics.Append(resp.State.Set(ctx, &data)...)
@@ -199,22 +209,22 @@ func (r *DatasetResource) Update(ctx context.Context, req resource.UpdateRequest
 		return
 	}
 
-	// Convert types.Map to map[string]any for process_rule
+	// Parse process_rule JSON string into map[string]any
 	var processRuleMap map[string]any
 	if !data.ProcessRule.IsNull() && !data.ProcessRule.IsUnknown() {
-		processRuleMap = make(map[string]any)
-		for k, v := range data.ProcessRule.Elements() {
-			processRuleMap[k] = v
+		if err := json.Unmarshal([]byte(data.ProcessRule.ValueString()), &processRuleMap); err != nil {
+			resp.Diagnostics.AddError("Invalid process_rule", fmt.Sprintf("Unable to parse process_rule JSON: %s", err))
+			return
 		}
 	}
 
 	updateReq := DatasetUpdateRequest{
-		Name:                  data.Name.ValueString(),
-		Description:           data.Description.ValueString(),
-		IndexingTechnique:     data.IndexingTechnique.ValueString(),
-		Permission:            data.Permission.ValueString(),
-		ProcessRule:           processRuleMap,
-		EmbeddingModel:        data.EmbeddingModel.ValueString(),
+		Name:                   data.Name.ValueString(),
+		Description:            data.Description.ValueString(),
+		IndexingTechnique:      data.IndexingTechnique.ValueString(),
+		Permission:             data.Permission.ValueString(),
+		ProcessRule:            processRuleMap,
+		EmbeddingModel:         data.EmbeddingModel.ValueString(),
 		EmbeddingModelProvider: data.EmbeddingModelProvider.ValueString(),
 	}
 
@@ -232,9 +242,10 @@ func (r *DatasetResource) Update(ctx context.Context, req resource.UpdateRequest
 	data.EmbeddingModel = types.StringValue(dataset.EmbeddingModel)
 	data.EmbeddingModelProvider = types.StringValue(dataset.EmbeddingModelProvider)
 
-	// Set process_rule from response
+	// Set process_rule from response as JSON string
 	if dataset.ProcessRule != nil {
-		data.ProcessRule, _ = types.MapValueFrom(ctx, types.DynamicType, dataset.ProcessRule)
+		processRuleJSON, _ := json.Marshal(dataset.ProcessRule)
+		data.ProcessRule = types.StringValue(string(processRuleJSON))
 	}
 
 	resp.Diagnostics.Append(resp.State.Set(ctx, &data)...)

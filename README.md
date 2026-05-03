@@ -176,16 +176,17 @@ resource "dify_dataset" "my_dataset" {
   name                = "My Knowledge Base"
   description         = "Documentation dataset"
   indexing_technique  = "high_quality"
-  permission          = "all_members"
-  process_rule = {
+  permission          = "all_team_members"
+  process_rule = jsonencode({
     mode  = "automatic"
     rules = {
       chunk_size = 500
       overlap    = 50
     }
-  }
-  embedding_model         = "text-embedding-3-small"
-  embedding_model_provider = "openai"
+  })
+  embedding_model         = "text-embedding-3-large"
+  embedding_model_provider = "langgenius/openai/openai"
+  creator_email            = "user@example.com"
 }
 ```
 
@@ -194,8 +195,9 @@ resource "dify_dataset" "my_dataset" {
 | `name` | String (required) | Dataset name (1-40 characters) |
 | `description` | String (optional) | Dataset description (max 400 characters) |
 | `indexing_technique` | String (optional) | Indexing technique: `high_quality` (requires embedding model) or `economy` |
-| `permission` | String (optional) | Dataset permission: `only_me` or `all_members` |
-| `process_rule` | Map (optional) | Chunking strategy configuration (e.g., mode, rules with chunk_size, overlap) |
+| `permission` | String (optional) | Dataset permission: `only_me`, `all_team_members`, or `partial_members` |
+| `process_rule` | String (optional) | Chunking strategy configuration as a JSON string (use `jsonencode()`) |
+| `creator_email` | String (required) | Email of the active account that will own this dataset |
 | `embedding_model` | String (optional) | Embedding model name (required for high_quality indexing) |
 | `embedding_model_provider` | String (optional) | Embedding model provider (required for high_quality indexing) |
 | `id` | String (computed) | Dataset ID |
@@ -211,25 +213,26 @@ Manages a document in a Dify dataset. Document chunking/indexing is async and th
 resource "dify_dataset_document" "doc_text" {
   dataset_id              = dify_dataset.my_dataset.id
   data_source_type        = "text"
-  data_source_info = {
+  data_source_info = jsonencode({
     text_content = "This is the document content..."
-  }
+  })
   indexing_technique      = "high_quality"
-  embedding_model         = "text-embedding-3-small"
-  embedding_model_provider = "openai"
+  embedding_model         = "text-embedding-3-large"
+  embedding_model_provider = "langgenius/openai/openai"
+  creator_email            = "user@example.com"
 }
 
 # Upload a file from the local filesystem
 resource "dify_dataset_document" "doc_file" {
   dataset_id              = dify_dataset.my_dataset.id
   data_source_type        = "upload_file"
-  data_source_info = {
+  data_source_info = jsonencode({
     file_name     = "example.pdf"
     file_content = filebase64("files/example.pdf")
-  }
+  })
   indexing_technique      = "high_quality"
-  embedding_model         = "text-embedding-3-small"
-  embedding_model_provider = "openai"
+  embedding_model         = "text-embedding-3-large"
+  embedding_model_provider = "langgenius/openai/openai"
 }
 ```
 
@@ -237,7 +240,8 @@ resource "dify_dataset_document" "doc_file" {
 |---|---|---|
 | `dataset_id` | String (required) | Dataset ID to upload the document to |
 | `data_source_type` | String (required) | Data source type: `upload_file` or `text` |
-| `data_source_info` | Map (required) | Data source content: `text_content` for text type, or `file_name` + `file_content` (base64) for file upload |
+| `data_source_info` | String (required) | Data source content as a JSON string: `text_content` for text type, or `file_name` + `file_content` (base64) for file upload (use `jsonencode()`) |
+| `creator_email` | String (required) | Email of the active account that will own this document |
 | `indexing_technique` | String (optional) | Indexing technique (defaults to dataset's technique) |
 | `embedding_model` | String (optional) | Embedding model name (required for high_quality) |
 | `embedding_model_provider` | String (optional) | Embedding model provider (required for high_quality) |
