@@ -1,0 +1,84 @@
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="868pt" height="179pt" viewBox="0.00 0.00 868.00 179.00">
+<g id="graph0" class="graph" transform="scale(1 1) rotate(0) translate(4 175)">
+<title>G</title>
+<polygon fill="white" stroke="none" points="-4,4 -4,-175 864.17,-175 864.17,4 -4,4"/>
+<!-- data.dify_model_providers.all -->
+<g id="node1" class="node">
+<title>data.dify_model_providers.all</title>
+<polygon fill="none" stroke="black" points="851.42,-36 666.69,-36 666.69,0 851.42,0 851.42,-36"/>
+<text xml:space="preserve" text-anchor="middle" x="759.05" y="-13.8" font-family="sans-serif" font-size="14.00">data.dify_model_providers.all</text>
+</g>
+<!-- data.dify_plugins.all -->
+<g id="node2" class="node">
+<title>data.dify_plugins.all</title>
+<polygon fill="none" stroke="black" points="824.6,-90 693.51,-90 693.51,-54 824.6,-54 824.6,-90"/>
+<text xml:space="preserve" text-anchor="middle" x="759.05" y="-67.8" font-family="sans-serif" font-size="14.00">data.dify_plugins.all</text>
+</g>
+<!-- dify_app.my_workflow -->
+<g id="node3" class="node">
+<title>dify_app.my_workflow</title>
+<polygon fill="none" stroke="black" points="621.94,-144 473.35,-144 473.35,-108 621.94,-108 621.94,-144"/>
+<text xml:space="preserve" text-anchor="middle" x="547.64" y="-121.8" font-family="sans-serif" font-size="14.00">dify_app.my_workflow</text>
+</g>
+<!-- dify_model_provider_credential.openai -->
+<g id="node5" class="node">
+<title>dify_model_provider_credential.openai</title>
+<polygon fill="none" stroke="black" points="437.35,-171 199.37,-171 199.37,-135 437.35,-135 437.35,-171"/>
+<text xml:space="preserve" text-anchor="middle" x="318.36" y="-148.8" font-family="sans-serif" font-size="14.00">dify_model_provider_credential.openai</text>
+</g>
+<!-- dify_app.my_workflow&#45;&gt;dify_model_provider_credential.openai -->
+<g id="edge1" class="edge">
+<title>dify_app.my_workflow-&gt;dify_model_provider_credential.openai</title>
+<path fill="none" stroke="black" d="M472.85,-134.77C465.1,-135.69 457.06,-136.64 448.91,-137.61"/>
+<polygon fill="black" stroke="black" points="448.77,-134.1 439.25,-138.76 449.59,-141.05 448.77,-134.1"/>
+</g>
+<!-- dify_tool_provider_credential.tavily -->
+<g id="node8" class="node">
+<title>dify_tool_provider_credential.tavily</title>
+<polygon fill="none" stroke="black" points="428.02,-117 208.69,-117 208.69,-81 428.02,-81 428.02,-117"/>
+<text xml:space="preserve" text-anchor="middle" x="318.36" y="-94.8" font-family="sans-serif" font-size="14.00">dify_tool_provider_credential.tavily</text>
+</g>
+<!-- dify_app.my_workflow&#45;&gt;dify_tool_provider_credential.tavily -->
+<g id="edge2" class="edge">
+<title>dify_app.my_workflow-&gt;dify_tool_provider_credential.tavily</title>
+<path fill="none" stroke="black" d="M472.85,-117.23C462.15,-115.96 450.92,-114.63 439.6,-113.28"/>
+<polygon fill="black" stroke="black" points="440.11,-109.82 429.77,-112.12 439.29,-116.77 440.11,-109.82"/>
+</g>
+<!-- dify_app_api_key.workflow_key -->
+<g id="node4" class="node">
+<title>dify_app_api_key.workflow_key</title>
+<polygon fill="none" stroke="black" points="860.17,-144 657.94,-144 657.94,-108 860.17,-108 860.17,-144"/>
+<text xml:space="preserve" text-anchor="middle" x="759.05" y="-121.8" font-family="sans-serif" font-size="14.00">dify_app_api_key.workflow_key</text>
+</g>
+<!-- dify_app_api_key.workflow_key&#45;&gt;dify_app.my_workflow -->
+<g id="edge3" class="edge">
+<title>dify_app_api_key.workflow_key-&gt;dify_app.my_workflow</title>
+<path fill="none" stroke="black" d="M657.64,-126C649.6,-126 641.53,-126 633.61,-126"/>
+<polygon fill="black" stroke="black" points="633.66,-122.5 623.66,-126 633.66,-129.5 633.66,-122.5"/>
+</g>
+<!-- dify_plugin_install.openai -->
+<g id="node6" class="node">
+<title>dify_plugin_install.openai</title>
+<polygon fill="none" stroke="black" points="163.37,-171 0,-171 0,-135 163.37,-135 163.37,-171"/>
+<text xml:space="preserve" text-anchor="middle" x="81.68" y="-148.8" font-family="sans-serif" font-size="14.00">dify_plugin_install.openai</text>
+</g>
+<!-- dify_model_provider_credential.openai&#45;&gt;dify_plugin_install.openai -->
+<g id="edge4" class="edge">
+<title>dify_model_provider_credential.openai-&gt;dify_plugin_install.openai</title>
+<path fill="none" stroke="black" d="M198.99,-153C190.95,-153 182.92,-153 175.05,-153"/>
+<polygon fill="black" stroke="black" points="175.16,-149.5 165.16,-153 175.16,-156.5 175.16,-149.5"/>
+</g>
+<!-- dify_plugin_install.tavily -->
+<g id="node7" class="node">
+<title>dify_plugin_install.tavily</title>
+<polygon fill="none" stroke="black" points="160.65,-117 2.72,-117 2.72,-81 160.65,-81 160.65,-117"/>
+<text xml:space="preserve" text-anchor="middle" x="81.68" y="-94.8" font-family="sans-serif" font-size="14.00">dify_plugin_install.tavily</text>
+</g>
+<!-- dify_tool_provider_credential.tavily&#45;&gt;dify_plugin_install.tavily -->
+<g id="edge5" class="edge">
+<title>dify_tool_provider_credential.tavily-&gt;dify_plugin_install.tavily</title>
+<path fill="none" stroke="black" d="M208.27,-99C196.2,-99 184.02,-99 172.24,-99"/>
+<polygon fill="black" stroke="black" points="172.59,-95.5 162.59,-99 172.59,-102.5 172.59,-95.5"/>
+</g>
+</g>
+</svg>

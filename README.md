@@ -39,6 +39,8 @@ provider "dify" {
 
 **Prerequisite**: The Dify instance must have `ADMIN_API_KEY` configured in its environment.
 
+![Dependency Graph](img/plan.svg)
+
 ## Resources
 
 ### `dify_app`
