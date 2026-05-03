@@ -571,3 +571,184 @@ func (c *DifyClient) DeleteAppAPIKey(ctx context.Context, appID, apiKeyID string
 
 	return readResponseBody(resp, nil)
 }
+
+// ---------------------------------------------------------------------------
+// Dataset API
+// ---------------------------------------------------------------------------
+
+// Dataset represents a Dify dataset.
+type Dataset struct {
+	ID                     string         `json:"id"`
+	Name                   string         `json:"name"`
+	Description            string         `json:"description"`
+	IndexingTechnique      string         `json:"indexing_technique"`
+	Permission             string         `json:"permission"`
+	ProcessRule            map[string]any `json:"process_rule"`
+	EmbeddingModel         string         `json:"embedding_model"`
+	EmbeddingModelProvider string         `json:"embedding_model_provider"`
+}
+
+// DatasetCreateRequest is the payload for creating a dataset.
+type DatasetCreateRequest struct {
+	Name                   string         `json:"name"`
+	Description            string         `json:"description"`
+	IndexingTechnique      string         `json:"indexing_technique,omitempty"`
+	Permission             string         `json:"permission,omitempty"`
+	ProcessRule            map[string]any `json:"process_rule,omitempty"`
+	EmbeddingModel         string         `json:"embedding_model,omitempty"`
+	EmbeddingModelProvider string         `json:"embedding_model_provider,omitempty"`
+}
+
+// DatasetUpdateRequest is the payload for updating a dataset.
+type DatasetUpdateRequest struct {
+	Name                   string         `json:"name,omitempty"`
+	Description            string         `json:"description,omitempty"`
+	IndexingTechnique      string         `json:"indexing_technique,omitempty"`
+	Permission             string         `json:"permission,omitempty"`
+	ProcessRule            map[string]any `json:"process_rule,omitempty"`
+	EmbeddingModel         string         `json:"embedding_model,omitempty"`
+	EmbeddingModelProvider string         `json:"embedding_model_provider,omitempty"`
+}
+
+// ListDatasets lists all datasets in the workspace.
+func (c *DifyClient) ListDatasets(ctx context.Context) ([]Dataset, error) {
+	url := c.provisioningURL("/datasets")
+	resp, err := c.doRequest(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return nil, err
+	}
+
+	var result []Dataset
+	if err := readResponseBody(resp, &result); err != nil {
+		return nil, err
+	}
+
+	return result, nil
+}
+
+// GetDataset retrieves a dataset by ID.
+func (c *DifyClient) GetDataset(ctx context.Context, datasetID string) (*Dataset, error) {
+	url := fmt.Sprintf("%s/admin/api/provisioning/workspaces/%s/datasets/%s", c.BaseURL, c.WorkspaceID, datasetID)
+	resp, err := c.doRequest(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return nil, err
+	}
+
+	var result Dataset
+	if err := readResponseBody(resp, &result); err != nil {
+		return nil, err
+	}
+
+	return &result, nil
+}
+
+// CreateDataset creates a new dataset.
+func (c *DifyClient) CreateDataset(ctx context.Context, req DatasetCreateRequest) (*Dataset, error) {
+	url := c.provisioningURL("/datasets")
+	resp, err := c.doRequest(ctx, http.MethodPost, url, req)
+	if err != nil {
+		return nil, err
+	}
+
+	var result Dataset
+	if err := readResponseBody(resp, &result); err != nil {
+		return nil, err
+	}
+
+	return &result, nil
+}
+
+// UpdateDataset updates a dataset.
+func (c *DifyClient) UpdateDataset(ctx context.Context, datasetID string, req DatasetUpdateRequest) (*Dataset, error) {
+	url := fmt.Sprintf("%s/admin/api/provisioning/workspaces/%s/datasets/%s", c.BaseURL, c.WorkspaceID, datasetID)
+	resp, err := c.doRequest(ctx, http.MethodPatch, url, req)
+	if err != nil {
+		return nil, err
+	}
+
+	var result Dataset
+	if err := readResponseBody(resp, &result); err != nil {
+		return nil, err
+	}
+
+	return &result, nil
+}
+
+// DeleteDataset deletes a dataset.
+func (c *DifyClient) DeleteDataset(ctx context.Context, datasetID string) error {
+	url := fmt.Sprintf("%s/admin/api/provisioning/workspaces/%s/datasets/%s", c.BaseURL, c.WorkspaceID, datasetID)
+	resp, err := c.doRequest(ctx, http.MethodDelete, url, nil)
+	if err != nil {
+		return err
+	}
+
+	return readResponseBody(resp, nil)
+}
+
+// ---------------------------------------------------------------------------
+// Dataset Document API
+// ---------------------------------------------------------------------------
+
+// DatasetDocument represents a document in a dataset.
+type DatasetDocument struct {
+	ID                     string `json:"id"`
+	DatasetID              string `json:"dataset_id"`
+	Name                   string `json:"name"`
+	DataSourceType         string `json:"data_source_type"`
+	IndexingStatus         string `json:"indexing_status"`
+	IndexingTechnique      string `json:"indexing_technique"`
+	EmbeddingModel         string `json:"embedding_model"`
+	EmbeddingModelProvider string `json:"embedding_model_provider"`
+}
+
+// DatasetDocumentCreateRequest is the payload for creating a document.
+type DatasetDocumentCreateRequest struct {
+	DataSourceType         string         `json:"data_source_type"`
+	DataSourceInfo         map[string]any `json:"data_source_info"`
+	IndexingTechnique      string         `json:"indexing_technique,omitempty"`
+	EmbeddingModel         string         `json:"embedding_model,omitempty"`
+	EmbeddingModelProvider string         `json:"embedding_model_provider,omitempty"`
+}
+
+// GetDatasetDocument retrieves a document by ID.
+func (c *DifyClient) GetDatasetDocument(ctx context.Context, datasetID, documentID string) (*DatasetDocument, error) {
+	url := fmt.Sprintf("%s/admin/api/provisioning/workspaces/%s/datasets/%s/documents/%s", c.BaseURL, c.WorkspaceID, datasetID, documentID)
+	resp, err := c.doRequest(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return nil, err
+	}
+
+	var result DatasetDocument
+	if err := readResponseBody(resp, &result); err != nil {
+		return nil, err
+	}
+
+	return &result, nil
+}
+
+// CreateDatasetDocument creates a new document in a dataset.
+func (c *DifyClient) CreateDatasetDocument(ctx context.Context, datasetID string, req DatasetDocumentCreateRequest) (*DatasetDocument, error) {
+	url := fmt.Sprintf("%s/admin/api/provisioning/workspaces/%s/datasets/%s/documents", c.BaseURL, c.WorkspaceID, datasetID)
+	resp, err := c.doRequest(ctx, http.MethodPost, url, req)
+	if err != nil {
+		return nil, err
+	}
+
+	var result DatasetDocument
+	if err := readResponseBody(resp, &result); err != nil {
+		return nil, err
+	}
+
+	return &result, nil
+}
+
+// DeleteDatasetDocument deletes a document.
+func (c *DifyClient) DeleteDatasetDocument(ctx context.Context, datasetID, documentID string) error {
+	url := fmt.Sprintf("%s/admin/api/provisioning/workspaces/%s/datasets/%s/documents/%s", c.BaseURL, c.WorkspaceID, datasetID, documentID)
+	resp, err := c.doRequest(ctx, http.MethodDelete, url, nil)
+	if err != nil {
+		return err
+	}
+
+	return readResponseBody(resp, nil)
+}

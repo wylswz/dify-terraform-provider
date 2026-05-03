@@ -113,6 +113,8 @@ func (p *DifyProvider) Resources(ctx context.Context) []func() resource.Resource
 		NewToolProviderCredentialResource,
 		NewPluginInstallResource,
 		NewAppAPIKeyResource,
+		NewDatasetResource,
+		NewDatasetDocumentResource,
 	}
 }
 

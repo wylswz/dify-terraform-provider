@@ -167,6 +167,85 @@ resource "dify_app_api_key" "key" {
 | `token` | String (computed, sensitive) | API key token |
 | `created_at` | String (computed) | Creation timestamp |
 
+### `dify_dataset`
+
+Manages a Dify dataset with chunking strategy configuration. Datasets are collections of documents used for knowledge retrieval.
+
+```hcl
+resource "dify_dataset" "my_dataset" {
+  name                = "My Knowledge Base"
+  description         = "Documentation dataset"
+  indexing_technique  = "high_quality"
+  permission          = "all_members"
+  process_rule = {
+    mode  = "automatic"
+    rules = {
+      chunk_size = 500
+      overlap    = 50
+    }
+  }
+  embedding_model         = "text-embedding-3-small"
+  embedding_model_provider = "openai"
+}
+```
+
+| Attribute | Type | Description |
+|---|---|---|
+| `name` | String (required) | Dataset name (1-40 characters) |
+| `description` | String (optional) | Dataset description (max 400 characters) |
+| `indexing_technique` | String (optional) | Indexing technique: `high_quality` (requires embedding model) or `economy` |
+| `permission` | String (optional) | Dataset permission: `only_me` or `all_members` |
+| `process_rule` | Map (optional) | Chunking strategy configuration (e.g., mode, rules with chunk_size, overlap) |
+| `embedding_model` | String (optional) | Embedding model name (required for high_quality indexing) |
+| `embedding_model_provider` | String (optional) | Embedding model provider (required for high_quality indexing) |
+| `id` | String (computed) | Dataset ID |
+
+**Important**: The chunking strategy (`process_rule`) is configured at the dataset level, not per document. All documents in a dataset share the same chunking strategy.
+
+### `dify_dataset_document`
+
+Manages a document in a Dify dataset. Document chunking/indexing is async and the resource polls until completion.
+
+```hcl
+# Upload text content directly
+resource "dify_dataset_document" "doc_text" {
+  dataset_id              = dify_dataset.my_dataset.id
+  data_source_type        = "text"
+  data_source_info = {
+    text_content = "This is the document content..."
+  }
+  indexing_technique      = "high_quality"
+  embedding_model         = "text-embedding-3-small"
+  embedding_model_provider = "openai"
+}
+
+# Upload a file from the local filesystem
+resource "dify_dataset_document" "doc_file" {
+  dataset_id              = dify_dataset.my_dataset.id
+  data_source_type        = "upload_file"
+  data_source_info = {
+    file_name     = "example.pdf"
+    file_content = filebase64("files/example.pdf")
+  }
+  indexing_technique      = "high_quality"
+  embedding_model         = "text-embedding-3-small"
+  embedding_model_provider = "openai"
+}
+```
+
+| Attribute | Type | Description |
+|---|---|---|
+| `dataset_id` | String (required) | Dataset ID to upload the document to |
+| `data_source_type` | String (required) | Data source type: `upload_file` or `text` |
+| `data_source_info` | Map (required) | Data source content: `text_content` for text type, or `file_name` + `file_content` (base64) for file upload |
+| `indexing_technique` | String (optional) | Indexing technique (defaults to dataset's technique) |
+| `embedding_model` | String (optional) | Embedding model name (required for high_quality) |
+| `embedding_model_provider` | String (optional) | Embedding model provider (required for high_quality) |
+| `indexing_status` | String (computed) | Document indexing status (e.g., `indexing`, `completed`, `error`) |
+| `id` | String (computed) | Document ID |
+
+**Important**: Document chunking is async and can take a long time. The resource polls for up to 600 seconds (10 minutes) for indexing to complete.
+
 ## Data Sources
 
 ### `dify_app`
