@@ -97,7 +97,7 @@ func (r *ToolProviderCredentialResource) Create(ctx context.Context, req resourc
 	}
 
 	// Convert types.Map to map[string]interface{}
-	credMap := make(map[string]interface{})
+	credMap := make(map[string]any)
 	for k, v := range data.Credentials.Elements() {
 		credMap[k] = v.(types.String).ValueString()
 	}
@@ -157,7 +157,7 @@ func (r *ToolProviderCredentialResource) Update(ctx context.Context, req resourc
 		return
 	}
 
-	credMap := make(map[string]interface{})
+	credMap := make(map[string]any)
 	for k, v := range data.Credentials.Elements() {
 		credMap[k] = v.(types.String).ValueString()
 	}

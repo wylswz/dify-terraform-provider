@@ -38,7 +38,7 @@ func (c *DifyClient) provisioningURL(path string) string {
 }
 
 // doRequest performs an HTTP request with the admin API key header.
-func (c *DifyClient) doRequest(ctx context.Context, method, url string, body interface{}) (*http.Response, error) {
+func (c *DifyClient) doRequest(ctx context.Context, method, url string, body any) (*http.Response, error) {
 	var reqBody io.Reader
 	if body != nil {
 		data, err := json.Marshal(body)
@@ -70,7 +70,7 @@ func (e *APIError) Error() string {
 }
 
 // readResponseBody reads and unmarshals the response body.
-func readResponseBody(resp *http.Response, target interface{}) error {
+func readResponseBody(resp *http.Response, target any) error {
 	defer resp.Body.Close()
 
 	data, err := io.ReadAll(resp.Body)
@@ -246,15 +246,15 @@ func (c *DifyClient) ListApps(ctx context.Context) (*AppListResponse, error) {
 
 // CredentialCreateRequest is the payload for creating a credential.
 type CredentialCreateRequest struct {
-	Credentials map[string]interface{} `json:"credentials"`
-	Name        string                 `json:"name,omitempty"`
+	Credentials map[string]any `json:"credentials"`
+	Name        string         `json:"name,omitempty"`
 }
 
 // CredentialUpdateRequest is the payload for updating a credential.
 type CredentialUpdateRequest struct {
-	CredentialID string                 `json:"credential_id"`
-	Credentials  map[string]interface{} `json:"credentials"`
-	Name         string                 `json:"name,omitempty"`
+	CredentialID string         `json:"credential_id"`
+	Credentials  map[string]any `json:"credentials"`
+	Name         string         `json:"name,omitempty"`
 }
 
 // CredentialDeleteRequest is the payload for deleting a credential.
@@ -269,8 +269,8 @@ type CredentialSwitchRequest struct {
 
 // CredentialResponse is the response from the credential API.
 type CredentialResponse struct {
-	Credentials  map[string]interface{} `json:"credentials"`
-	CredentialID string                 `json:"credential_id"`
+	Credentials  map[string]any `json:"credentials"`
+	CredentialID string         `json:"credential_id"`
 }
 
 // CredentialCreateResponse is the response from creating a credential.

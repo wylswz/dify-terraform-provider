@@ -155,7 +155,7 @@ func (r *PluginInstallResource) Create(ctx context.Context, req resource.CreateR
 	var installationID string
 	found := false
 
-	for i := 0; i < 180; i++ {
+	for range 180 {
 		select {
 		case <-ctx.Done():
 			resp.Diagnostics.AddError("Context Cancelled", "Plugin install polling cancelled")
