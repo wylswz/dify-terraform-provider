@@ -1,3 +1,4 @@
+> This is a demo project
 # Dify Terraform Provider
 
 A Terraform provider for managing [Dify](https://dify.ai) applications, model provider credentials, plugins, and API keys as infrastructure-as-code.
