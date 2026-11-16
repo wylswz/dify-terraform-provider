@@ -9,49 +9,42 @@ terraform {
 
 provider "dify" {
   host         = "http://localhost"
-  api_key      = var.dify_admin_api_key
+  token        = var.dify_token
   workspace_id = var.dify_workspace_id
 }
 
-variable "dify_admin_api_key" {
-  type      = string
-  sensitive = true
+variable "dify_token" {
+  type        = string
+  sensitive   = true
+  description = "Dify Personal Access Token (console → account settings → Personal Access Tokens)"
 }
 
 variable "openai_api_key" {
   type      = string
   sensitive = true
-  default = ""
+  default   = ""
 }
 
 variable "tavily_api_key" {
   type      = string
   sensitive = true
-  default = ""
+  default   = ""
 }
 
 variable "dify_workspace_id" {
   type = string
 }
 
-variable "creator_email" {
-  type        = string
-  description = "Email of the active account in the Dify workspace that will own datasets and documents"
-}
-
-
 # ---------------------------------------------------------------------------
 # Step 1: Install the OpenAI model plugin from marketplace
-# The resource polls until the plugin is ready before proceeding.
+# The resource polls the install task until the plugin is ready.
 # ---------------------------------------------------------------------------
 resource "dify_plugin_install" "openai" {
   plugin_unique_identifier = "langgenius/openai:0.3.8@592c8252795b5f75807de2d609a03196ed02596b409f7642b4a07548c7ff57ef"
-  source                   = "marketplace"
 }
 
 resource "dify_plugin_install" "tavily" {
   plugin_unique_identifier = "langgenius/tavily:0.1.7@5fce9cf01fecda9ad92e5125397d2bb5497429baed276c7f14f033e7debd0abe"
-  source                   = "marketplace"
 }
 
 # ---------------------------------------------------------------------------
@@ -59,7 +52,7 @@ resource "dify_plugin_install" "tavily" {
 # Depends on the plugin being installed first.
 # ---------------------------------------------------------------------------
 resource "dify_model_provider_credential" "openai" {
-  provider_name = "openai"
+  provider_name = "langgenius/openai/openai"
   name          = "production-key"
   credentials = {
     openai_api_key = var.openai_api_key
@@ -71,7 +64,7 @@ resource "dify_model_provider_credential" "openai" {
 # ---------------------------------------------------------------------------
 # Step 2b: Configure Tavily tool provider credentials
 # Tavily is a tool plugin, so it uses a separate resource type.
-# Note: provider_name must use the full format langgenius/tavily/tavily
+# Note: provider_name must use the full path langgenius/tavily/tavily
 # ---------------------------------------------------------------------------
 resource "dify_tool_provider_credential" "tavily" {
   provider_name = "langgenius/tavily/tavily"
@@ -88,10 +81,9 @@ resource "dify_tool_provider_credential" "tavily" {
 # Depends on credentials being configured so the app can reference models.
 # ---------------------------------------------------------------------------
 resource "dify_app" "my_workflow" {
-  creator_email = var.creator_email
-  dsl_yaml      = file("dsls/test.yml")
-  name          = "My Workflow"
-  description   = "A workflow managed by Terraform"
+  dsl_yaml    = file("dsls/test.yml")
+  name        = "My Workflow"
+  description = "A workflow managed by Terraform"
 
   depends_on = [
     dify_model_provider_credential.openai,
@@ -106,56 +98,13 @@ resource "dify_app_api_key" "workflow_key" {
   app_id = dify_app.my_workflow.id
 }
 
-# ---------------------------------------------------------------------------
-# Step 5: Create a dataset with chunking strategy
-# The process_rule defines how documents are chunked for indexing.
-# For high_quality indexing, an embedding model is required.
-# ---------------------------------------------------------------------------
-resource "dify_dataset" "my_dataset" {
-  name                = "My Knowledge Base"
-  description         = "Documentation dataset"
-  indexing_technique  = "high_quality"
-  permission          = "all_team_members"
-  process_rule = jsonencode({
-    mode  = "automatic"
-    rules = {
-      chunk_size = 500
-      overlap    = 50
-    }
-  })
-  embedding_model         = "text-embedding-3-large"
-  embedding_model_provider = "langgenius/openai/openai"
-  creator_email           = var.creator_email
+# List models (optionally filtered)
+data "dify_models" "openai_llms" {
+  provider_name = "langgenius/openai/openai"
+  model_type    = "llm"
 
-  depends_on = [dify_model_provider_credential.openai]
+  depends_on = [dify_plugin_install.openai]
 }
-
-# ---------------------------------------------------------------------------
-# Step 6: Upload documents to the dataset
-# Document chunking is async - the resource polls until indexing completes.
-# You can upload either text content or files from the local filesystem.
-# ---------------------------------------------------------------------------
-
-# Example: Upload text content from a file
-resource "dify_dataset_document" "doc_text" {
-  dataset_id              = dify_dataset.my_dataset.id
-  data_source_type        = "text"
-  data_source_info = jsonencode({
-    text_content = file("knowledge/doc.md")
-  })
-  indexing_technique      = "high_quality"
-  embedding_model         = "text-embedding-3-large"
-  embedding_model_provider = "langgenius/openai/openai"
-  creator_email           = var.creator_email
-
-  depends_on = [
-    dify_dataset.my_dataset,
-    dify_model_provider_credential.openai
-  ]
-}
-
-# List model providers
-data "dify_model_providers" "all" {}
 
 # List installed plugins
 data "dify_plugins" "all" {}

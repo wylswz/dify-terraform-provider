@@ -29,10 +29,6 @@ type AppDataSourceModel struct {
 	Name        types.String `tfsdk:"name"`
 	Mode        types.String `tfsdk:"mode"`
 	Description types.String `tfsdk:"description"`
-	DSLYaml     types.String `tfsdk:"dsl_yaml"`
-	EnableSite  types.Bool   `tfsdk:"enable_site"`
-	EnableAPI   types.Bool   `tfsdk:"enable_api"`
-	CreatedAt   types.String `tfsdk:"created_at"`
 	UpdatedAt   types.String `tfsdk:"updated_at"`
 }
 
@@ -42,16 +38,16 @@ func (d *AppDataSource) Metadata(ctx context.Context, req datasource.MetadataReq
 
 func (d *AppDataSource) Schema(ctx context.Context, req datasource.SchemaRequest, resp *datasource.SchemaResponse) {
 	resp.Schema = schema.Schema{
-		MarkdownDescription: "Reads a Dify application including its DSL YAML export.",
+		MarkdownDescription: "Reads a Dify application by `id` or exact `name` (exactly one required).",
 
 		Attributes: map[string]schema.Attribute{
 			"id": schema.StringAttribute{
-				MarkdownDescription: "App ID to read.",
-				Required:            true,
+				MarkdownDescription: "App ID to read. Exactly one of `id` or `name` is required.",
+				Optional:            true,
 			},
 			"name": schema.StringAttribute{
-				MarkdownDescription: "App name.",
-				Computed:            true,
+				MarkdownDescription: "Exact app name to look up. Exactly one of `id` or `name` is required.",
+				Optional:            true,
 			},
 			"mode": schema.StringAttribute{
 				MarkdownDescription: "App mode.",
@@ -59,22 +55,6 @@ func (d *AppDataSource) Schema(ctx context.Context, req datasource.SchemaRequest
 			},
 			"description": schema.StringAttribute{
 				MarkdownDescription: "App description.",
-				Computed:            true,
-			},
-			"dsl_yaml": schema.StringAttribute{
-				MarkdownDescription: "DSL YAML export of the app.",
-				Computed:            true,
-			},
-			"enable_site": schema.BoolAttribute{
-				MarkdownDescription: "Whether the web app site is enabled.",
-				Computed:            true,
-			},
-			"enable_api": schema.BoolAttribute{
-				MarkdownDescription: "Whether the service API is enabled.",
-				Computed:            true,
-			},
-			"created_at": schema.StringAttribute{
-				MarkdownDescription: "Creation timestamp.",
 				Computed:            true,
 			},
 			"updated_at": schema.StringAttribute{
@@ -110,19 +90,60 @@ func (d *AppDataSource) Read(ctx context.Context, req datasource.ReadRequest, re
 		return
 	}
 
-	app, err := d.client.GetApp(ctx, data.ID.ValueString())
-	if err != nil {
-		resp.Diagnostics.AddError("Client Error", fmt.Sprintf("Unable to read app: %s", err))
+	appID := data.ID.ValueString()
+	appName := data.Name.ValueString()
+
+	if (appID == "") == (appName == "") {
+		resp.Diagnostics.AddError(
+			"Invalid App Lookup",
+			"Exactly one of `id` or `name` must be provided.",
+		)
 		return
 	}
 
+	// The apps list `name` filter also resolves an app id, so both lookups go
+	// through the same endpoint; results are then matched exactly.
+	lookup := appName
+	if appID != "" {
+		lookup = appID
+	}
+
+	apps, err := d.client.ListApps(ctx, lookup)
+	if err != nil {
+		resp.Diagnostics.AddError("Client Error", fmt.Sprintf("Unable to list apps: %s", err))
+		return
+	}
+
+	var matches []AppListItem
+	for _, app := range apps {
+		if appID != "" {
+			if app.ID == appID {
+				matches = append(matches, app)
+			}
+		} else if app.Name == appName {
+			matches = append(matches, app)
+		}
+	}
+
+	switch len(matches) {
+	case 0:
+		if appID != "" {
+			resp.Diagnostics.AddError("App Not Found", fmt.Sprintf("No app found with id '%s'", appID))
+		} else {
+			resp.Diagnostics.AddError("App Not Found", fmt.Sprintf("No app found named '%s'", appName))
+		}
+		return
+	case 1:
+	default:
+		resp.Diagnostics.AddError("Ambiguous App Name", fmt.Sprintf("%d apps are named '%s'; use `id` instead", len(matches), appName))
+		return
+	}
+
+	app := matches[0]
+	data.ID = types.StringValue(app.ID)
 	data.Name = types.StringValue(app.Name)
 	data.Mode = types.StringValue(app.Mode)
 	data.Description = types.StringValue(app.Description)
-	data.DSLYaml = types.StringValue(app.DSLYaml)
-	data.EnableSite = types.BoolValue(app.EnableSite)
-	data.EnableAPI = types.BoolValue(app.EnableAPI)
-	data.CreatedAt = types.StringValue(app.CreatedAt)
 	data.UpdatedAt = types.StringValue(app.UpdatedAt)
 
 	resp.Diagnostics.Append(resp.State.Set(ctx, &data)...)
