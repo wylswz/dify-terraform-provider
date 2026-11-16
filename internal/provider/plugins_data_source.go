@@ -25,15 +25,16 @@ type PluginsDataSource struct {
 
 // PluginItemModel describes a single installed plugin in the data source.
 type PluginItemModel struct {
-	PluginUniqueIdentifier types.String `tfsdk:"plugin_unique_identifier"`
-	PluginInstallationID   types.String `tfsdk:"plugin_installation_id"`
-	Name                   types.String `tfsdk:"name"`
+	PluginID   types.String `tfsdk:"plugin_id"`
+	Identifier types.String `tfsdk:"identifier"`
+	Version    types.String `tfsdk:"version"`
+	Category   types.String `tfsdk:"category"`
+	Source     types.String `tfsdk:"source"`
 }
 
 // PluginsDataSourceModel describes the data source data model.
 type PluginsDataSourceModel struct {
 	Plugins []PluginItemModel `tfsdk:"plugins"`
-	Total   types.Int64       `tfsdk:"total"`
 }
 
 func (d *PluginsDataSource) Metadata(ctx context.Context, req datasource.MetadataRequest, resp *datasource.MetadataResponse) {
@@ -42,7 +43,7 @@ func (d *PluginsDataSource) Metadata(ctx context.Context, req datasource.Metadat
 
 func (d *PluginsDataSource) Schema(ctx context.Context, req datasource.SchemaRequest, resp *datasource.SchemaResponse) {
 	resp.Schema = schema.Schema{
-		MarkdownDescription: "Lists all installed plugins in the workspace.",
+		MarkdownDescription: "Lists all plugins installed in the workspace.",
 
 		Attributes: map[string]schema.Attribute{
 			"plugins": schema.ListNestedAttribute{
@@ -50,24 +51,28 @@ func (d *PluginsDataSource) Schema(ctx context.Context, req datasource.SchemaReq
 				Computed:            true,
 				NestedObject: schema.NestedAttributeObject{
 					Attributes: map[string]schema.Attribute{
-						"plugin_unique_identifier": schema.StringAttribute{
-							MarkdownDescription: "Unique identifier for the plugin.",
+						"plugin_id": schema.StringAttribute{
+							MarkdownDescription: "Plugin ID (e.g. `langgenius/openai`).",
 							Computed:            true,
 						},
-						"plugin_installation_id": schema.StringAttribute{
-							MarkdownDescription: "Installation ID.",
+						"identifier": schema.StringAttribute{
+							MarkdownDescription: "Versioned plugin identifier (e.g. `langgenius/openai:0.3.8@<sha256>`).",
 							Computed:            true,
 						},
-						"name": schema.StringAttribute{
-							MarkdownDescription: "Plugin name.",
+						"version": schema.StringAttribute{
+							MarkdownDescription: "Installed version.",
+							Computed:            true,
+						},
+						"category": schema.StringAttribute{
+							MarkdownDescription: "Plugin category (e.g. `model`, `tool`).",
+							Computed:            true,
+						},
+						"source": schema.StringAttribute{
+							MarkdownDescription: "Installation source.",
 							Computed:            true,
 						},
 					},
 				},
-			},
-			"total": schema.Int64Attribute{
-				MarkdownDescription: "Total number of installed plugins.",
-				Computed:            true,
 			},
 		},
 	}
@@ -93,22 +98,23 @@ func (d *PluginsDataSource) Configure(ctx context.Context, req datasource.Config
 func (d *PluginsDataSource) Read(ctx context.Context, req datasource.ReadRequest, resp *datasource.ReadResponse) {
 	var data PluginsDataSourceModel
 
-	result, err := d.client.ListPlugins(ctx)
+	plugins, err := d.client.ListPlugins(ctx)
 	if err != nil {
 		resp.Diagnostics.AddError("Client Error", fmt.Sprintf("Unable to list plugins: %s", err))
 		return
 	}
 
-	plugins := make([]PluginItemModel, 0, len(result.Plugins))
-	for _, p := range result.Plugins {
-		plugins = append(plugins, PluginItemModel{
-			PluginUniqueIdentifier: types.StringValue(p.PluginUniqueIdentifier),
-			PluginInstallationID:   types.StringValue(p.PluginInstallationID),
-			Name:                   types.StringValue(p.Name),
+	items := make([]PluginItemModel, 0, len(plugins))
+	for _, p := range plugins {
+		items = append(items, PluginItemModel{
+			PluginID:   types.StringValue(p.PluginID),
+			Identifier: types.StringValue(p.Identifier),
+			Version:    types.StringValue(p.Version),
+			Category:   types.StringValue(p.Category),
+			Source:     types.StringValue(p.Source),
 		})
 	}
-	data.Plugins = plugins
-	data.Total = types.Int64Value(int64(result.Total))
+	data.Plugins = items
 
 	resp.Diagnostics.Append(resp.State.Set(ctx, &data)...)
 }

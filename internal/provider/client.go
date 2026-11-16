@@ -7,83 +7,315 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
+	"strconv"
 	"strings"
+	"sync"
+	"time"
 )
 
-// DifyClient is a thin HTTP client for the Dify admin API.
+// DifyClient is a thin HTTP client for the Dify user-scoped OpenAPI
+// (`/openapi/v1`), authenticated with a Personal Access Token.
 type DifyClient struct {
 	BaseURL     string
-	APIKey      string
+	Token       string
 	WorkspaceID string
 	HTTPClient  *http.Client
+
+	// pluginPollInterval and pluginPollTimeout control how InstallPlugin waits
+	// for an asynchronous plugin install task. They are fields so tests can
+	// shrink the interval.
+	pluginPollInterval time.Duration
+	pluginPollTimeout  time.Duration
+
+	// catalog is the X-Dify-Catalog fingerprint guarding /openapi/v1 requests.
+	// It is refreshed from response headers and from GET /_version.
+	mu      sync.Mutex
+	catalog string
+
+	// sleep waits between rate-limit retries; a field so tests can stub it.
+	sleep func(ctx context.Context, d time.Duration) error
 }
 
 // NewDifyClient creates a new DifyClient from provider configuration.
-func NewDifyClient(host, apiKey, workspaceID string) *DifyClient {
-	baseURL := strings.TrimRight(host, "/")
+func NewDifyClient(host, token, workspaceID string) *DifyClient {
+	baseURL := strings.TrimRight(host, "/") + "/openapi/v1"
 	return &DifyClient{
-		BaseURL:     baseURL,
-		APIKey:      apiKey,
-		WorkspaceID: workspaceID,
-		HTTPClient:  &http.Client{},
+		BaseURL:            baseURL,
+		Token:              token,
+		WorkspaceID:        workspaceID,
+		HTTPClient:         &http.Client{},
+		pluginPollInterval: 3 * time.Second,
+		pluginPollTimeout:  10 * time.Minute,
+		sleep:              sleepCtx,
 	}
 }
 
-// provisioningURL builds the full URL for a provisioning endpoint.
-func (c *DifyClient) provisioningURL(path string) string {
-	return fmt.Sprintf("%s/admin/api/provisioning/workspaces/%s%s", c.BaseURL, c.WorkspaceID, path)
+// workspaceURL builds the full URL for a workspace-scoped endpoint.
+func (c *DifyClient) workspaceURL(path string) string {
+	return fmt.Sprintf("%s/workspaces/%s%s", c.BaseURL, url.PathEscape(c.WorkspaceID), path)
 }
 
-// doRequest performs an HTTP request with the admin API key header.
+// doRequest performs an HTTP request with the bearer token and catalog
+// fingerprint headers. Guarded endpoints reject stale fingerprints with
+// 412 {"code":"catalog_stale"} (retried once) and rate-limit with
+// 429 {"code":"too_many_requests"} plus a Retry-After header (retried up to
+// maxRateLimitRetries times, honouring ctx cancellation while waiting).
 func (c *DifyClient) doRequest(ctx context.Context, method, url string, body any) (*http.Response, error) {
-	var reqBody io.Reader
+	var bodyBytes []byte
 	if body != nil {
 		data, err := json.Marshal(body)
 		if err != nil {
 			return nil, fmt.Errorf("failed to marshal request body: %w", err)
 		}
-		reqBody = bytes.NewReader(data)
+		bodyBytes = data
 	}
 
-	req, err := http.NewRequestWithContext(ctx, method, url, reqBody)
+	if err := c.ensureCatalog(ctx); err != nil {
+		return nil, err
+	}
+
+	const maxRateLimitRetries = 5
+
+	catalogRetried := false
+	rateLimitRetries := 0
+	backoff := time.Second
+
+	for {
+		var reqBody io.Reader
+		if len(bodyBytes) > 0 {
+			reqBody = bytes.NewReader(bodyBytes)
+		}
+
+		req, err := http.NewRequestWithContext(ctx, method, url, reqBody)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create request: %w", err)
+		}
+
+		if len(bodyBytes) > 0 {
+			req.Header.Set("Content-Type", "application/json")
+		}
+		req.Header.Set("Authorization", "Bearer "+c.Token)
+		req.Header.Set("Accept", "application/json")
+		req.Header.Set("X-Dify-Catalog", c.getCatalog())
+
+		resp, err := c.HTTPClient.Do(req)
+		if err != nil {
+			return nil, err
+		}
+		c.rememberCatalog(resp)
+
+		if resp.StatusCode == http.StatusPreconditionFailed && !catalogRetried {
+			data, readErr := io.ReadAll(resp.Body)
+			resp.Body.Close()
+			if readErr != nil {
+				return nil, fmt.Errorf("failed to read response body: %w", readErr)
+			}
+			if isCatalogStale(data) {
+				catalogRetried = true
+				// rememberCatalog already stored the response's fingerprint;
+				// refetch via /_version only when the header was absent.
+				if resp.Header.Get("X-Dify-Catalog") == "" {
+					if fp, fetchErr := c.fetchCatalog(ctx); fetchErr == nil {
+						c.setCatalog(fp)
+					}
+				}
+				continue
+			}
+			resp.Body = io.NopCloser(bytes.NewReader(data))
+			return resp, nil
+		}
+
+		if resp.StatusCode == http.StatusTooManyRequests && rateLimitRetries < maxRateLimitRetries {
+			rateLimitRetries++
+			wait := rateLimitWait(resp, &backoff)
+			_, _ = io.Copy(io.Discard, resp.Body)
+			resp.Body.Close()
+			if err := c.sleep(ctx, wait); err != nil {
+				return nil, err
+			}
+			continue
+		}
+
+		return resp, nil
+	}
+}
+
+// rateLimitWait returns how long to wait before retrying a 429 response: the
+// Retry-After header value in whole seconds when present and valid, otherwise
+// exponential backoff (advanced through backoff, capped at 30s).
+func rateLimitWait(resp *http.Response, backoff *time.Duration) time.Duration {
+	if seconds, err := strconv.Atoi(strings.TrimSpace(resp.Header.Get("Retry-After"))); err == nil && seconds > 0 {
+		return time.Duration(seconds) * time.Second
+	}
+	wait := *backoff
+	*backoff *= 2
+	if *backoff > 30*time.Second {
+		*backoff = 30 * time.Second
+	}
+	return wait
+}
+
+// sleepCtx waits for d or until ctx is done, returning the ctx error.
+func sleepCtx(ctx context.Context, d time.Duration) error {
+	timer := time.NewTimer(d)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
+}
+
+// getCatalog returns the stored catalog fingerprint.
+func (c *DifyClient) getCatalog() string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.catalog
+}
+
+// setCatalog stores a catalog fingerprint.
+func (c *DifyClient) setCatalog(fingerprint string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.catalog = fingerprint
+}
+
+// rememberCatalog stores the fingerprint carried by a response's
+// X-Dify-Catalog header, when present.
+func (c *DifyClient) rememberCatalog(resp *http.Response) {
+	if fp := resp.Header.Get("X-Dify-Catalog"); fp != "" {
+		c.setCatalog(fp)
+	}
+}
+
+// ensureCatalog fetches the catalog fingerprint from /_version when none is
+// stored yet.
+func (c *DifyClient) ensureCatalog(ctx context.Context) error {
+	if c.getCatalog() != "" {
+		return nil
+	}
+	fingerprint, err := c.fetchCatalog(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create request: %w", err)
+		return err
 	}
+	c.setCatalog(fingerprint)
+	return nil
+}
 
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("X-Admin-Api-Key", c.APIKey)
+// fetchCatalog retrieves the current catalog fingerprint via an
+// unauthenticated GET {BaseURL}/_version.
+func (c *DifyClient) fetchCatalog(ctx context.Context) (string, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.BaseURL+"/_version", nil)
+	if err != nil {
+		return "", fmt.Errorf("failed to create catalog request: %w", err)
+	}
+	req.Header.Set("Accept", "application/json")
 
-	return c.HTTPClient.Do(req)
+	resp, err := c.HTTPClient.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("failed to fetch catalog fingerprint: %w", err)
+	}
+	defer resp.Body.Close()
+	_, _ = io.Copy(io.Discard, resp.Body)
+
+	fingerprint := resp.Header.Get("X-Dify-Catalog")
+	if fingerprint == "" {
+		return "", fmt.Errorf("catalog fingerprint missing from /_version response (HTTP %d)", resp.StatusCode)
+	}
+	return fingerprint, nil
+}
+
+// isCatalogStale reports whether a response body is the 412 catalog_stale
+// error shape.
+func isCatalogStale(data []byte) bool {
+	var body struct {
+		Code string `json:"code"`
+	}
+	if err := json.Unmarshal(data, &body); err != nil {
+		return false
+	}
+	return body.Code == "catalog_stale"
 }
 
 // APIError represents an HTTP error response from the Dify API.
+// The API answers non-2xx with {"code", "message", "status", "hint"?, "details"?};
+// Code and Message are empty when the body is not that shape.
 type APIError struct {
 	StatusCode int
+	Code       string
+	Message    string
 	Body       string
 }
 
 func (e *APIError) Error() string {
-	return fmt.Sprintf("API error (status %d): %s", e.StatusCode, e.Body)
+	msg := e.Message
+	if msg == "" {
+		msg = e.Body
+	}
+	if e.Code != "" {
+		return fmt.Sprintf("Dify API error (HTTP %d, code %s): %s", e.StatusCode, e.Code, msg)
+	}
+	return fmt.Sprintf("Dify API error (HTTP %d): %s", e.StatusCode, msg)
 }
 
-// readResponseBody reads and unmarshals the response body.
-func readResponseBody(resp *http.Response, target any) error {
+// isNotFound reports whether err is an APIError with HTTP 404.
+func isNotFound(err error) bool {
+	var apiErr *APIError
+	return errors.As(err, &apiErr) && apiErr.StatusCode == http.StatusNotFound
+}
+
+// apiErrorFromBody builds an APIError from a non-2xx response body,
+// decoding the ErrorBody shape when present.
+func apiErrorFromBody(statusCode int, data []byte) *APIError {
+	apiErr := &APIError{StatusCode: statusCode, Body: string(data)}
+	var body struct {
+		Code    string `json:"code"`
+		Message string `json:"message"`
+		Status  int    `json:"status"`
+	}
+	if err := json.Unmarshal(data, &body); err == nil {
+		apiErr.Code = body.Code
+		apiErr.Message = body.Message
+	}
+	return apiErr
+}
+
+// readResponse reads the whole body and, for non-2xx statuses, returns an APIError.
+func readResponse(resp *http.Response) ([]byte, error) {
 	defer resp.Body.Close()
 
 	data, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return fmt.Errorf("failed to read response body: %w", err)
+		return nil, fmt.Errorf("failed to read response body: %w", err)
 	}
 
-	if resp.StatusCode >= 400 {
-		return &APIError{StatusCode: resp.StatusCode, Body: string(data)}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil, apiErrorFromBody(resp.StatusCode, data)
 	}
 
-	if target != nil {
-		if err := json.Unmarshal(data, target); err != nil {
+	return data, nil
+}
+
+// doJSON performs a request and unmarshals a 2xx JSON response into out.
+func (c *DifyClient) doJSON(ctx context.Context, method, url string, reqBody, out any) error {
+	resp, err := c.doRequest(ctx, method, url, reqBody)
+	if err != nil {
+		return err
+	}
+
+	data, err := readResponse(resp)
+	if err != nil {
+		return err
+	}
+
+	if out != nil && len(data) > 0 {
+		if err := json.Unmarshal(data, out); err != nil {
 			return fmt.Errorf("failed to unmarshal response: %w (body: %s)", err, string(data))
 		}
 	}
@@ -95,662 +327,523 @@ func readResponseBody(resp *http.Response, target any) error {
 // App API
 // ---------------------------------------------------------------------------
 
-// AppCreateRequest is the payload for creating an app.
-type AppCreateRequest struct {
-	YAMLContent  string `json:"yaml_content"`
-	CreatorEmail string `json:"creator_email"`
-	Name         string `json:"name,omitempty"`
-	Description  string `json:"description,omitempty"`
-}
-
-// AppUpdateRequest is the payload for updating an app.
-type AppUpdateRequest struct {
+// AppImportRequest is the payload for POST /workspaces/{ws}/apps/imports.
+type AppImportRequest struct {
 	YAMLContent string `json:"yaml_content"`
 	Name        string `json:"name,omitempty"`
 	Description string `json:"description,omitempty"`
+	AppID       string `json:"app_id,omitempty"`
+	DraftHash   string `json:"draft_hash,omitempty"`
 }
 
-// AppResponse is the response from the app API.
-type AppResponse struct {
-	ID             string `json:"id"`
-	Name           string `json:"name"`
-	Mode           string `json:"mode"`
-	Description    string `json:"description"`
-	IconType       string `json:"icon_type"`
-	Icon           string `json:"icon"`
-	IconBackground string `json:"icon_background"`
-	EnableSite     bool   `json:"enable_site"`
-	EnableAPI      bool   `json:"enable_api"`
-	DSLYaml        string `json:"dsl_yaml"`
-	CreatedAt      string `json:"created_at"`
-	UpdatedAt      string `json:"updated_at"`
+// ImportWarning is one portable DSL reference that could not be restored.
+type ImportWarning struct {
+	Code    string         `json:"code"`
+	Path    string         `json:"path"`
+	Message string         `json:"message"`
+	Details map[string]any `json:"details"`
 }
 
-// ImportResponse is the response from the DSL import API.
-type ImportResponse struct {
-	ID                 string `json:"id"`
-	Status             string `json:"status"`
-	AppID              string `json:"app_id"`
-	AppMode            string `json:"app_mode"`
-	CurrentDSLVersion  string `json:"current_dsl_version"`
-	ImportedDSLVersion string `json:"imported_dsl_version"`
-	Error              string `json:"error"`
+// ImportResult mirrors the Import shape returned by the DSL import endpoints.
+// A failed import is answered with HTTP 400 carrying this same shape, not ErrorBody.
+type ImportResult struct {
+	ID       string          `json:"id"`
+	Status   string          `json:"status"`
+	AppID    string          `json:"app_id"`
+	AppMode  string          `json:"app_mode"`
+	Error    string          `json:"error"`
+	Warnings []ImportWarning `json:"warnings"`
 }
 
-// AppListItem is a single app in the list response.
-type AppListItem struct {
-	ID             string `json:"id"`
-	Name           string `json:"name"`
-	Mode           string `json:"mode"`
-	Description    string `json:"description"`
-	IconType       string `json:"icon_type"`
-	Icon           string `json:"icon"`
-	IconBackground string `json:"icon_background"`
-	EnableSite     bool   `json:"enable_site"`
-	EnableAPI      bool   `json:"enable_api"`
-	CreatedAt      string `json:"created_at"`
-	UpdatedAt      string `json:"updated_at"`
-}
+const (
+	importStatusPending = "pending"
+	importStatusFailed  = "failed"
+)
 
-// AppListResponse is the response from the app list API.
-type AppListResponse struct {
-	Data []AppListItem `json:"data"`
-}
+// readImportResult decodes an import/confirm response. On HTTP 400 the body is
+// the Import shape when the import itself failed, and ErrorBody otherwise.
+func readImportResult(resp *http.Response) (*ImportResult, error) {
+	defer resp.Body.Close()
 
-// CreateApp creates a new app via DSL import.
-func (c *DifyClient) CreateApp(ctx context.Context, req AppCreateRequest) (*ImportResponse, error) {
-	url := c.provisioningURL("/apps")
-	resp, err := c.doRequest(ctx, http.MethodPost, url, req)
+	data, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to read response body: %w", err)
 	}
 
-	var result ImportResponse
-	if err := readResponseBody(resp, &result); err != nil {
-		return nil, err
+	if resp.StatusCode == http.StatusBadRequest {
+		var result ImportResult
+		if err := json.Unmarshal(data, &result); err == nil && result.Status == importStatusFailed {
+			return nil, fmt.Errorf("DSL import failed: %s", result.Error)
+		}
 	}
 
-	if result.Status == "failed" {
-		return nil, fmt.Errorf("import failed: %s", result.Error)
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil, apiErrorFromBody(resp.StatusCode, data)
+	}
+
+	var result ImportResult
+	if len(data) > 0 {
+		if err := json.Unmarshal(data, &result); err != nil {
+			return nil, fmt.Errorf("failed to unmarshal response: %w (body: %s)", err, string(data))
+		}
 	}
 
 	return &result, nil
 }
 
-// GetApp retrieves an app with its DSL export.
-func (c *DifyClient) GetApp(ctx context.Context, appID string) (*AppResponse, error) {
-	url := fmt.Sprintf("%s/admin/api/provisioning/workspaces/%s/apps/%s", c.BaseURL, c.WorkspaceID, appID)
-	resp, err := c.doRequest(ctx, http.MethodGet, url, nil)
+// ImportApp creates (AppID empty) or overwrites (AppID set) an app from DSL
+// YAML, confirming the import when the server answers pending. Both completed
+// and completed-with-warnings are success; failed is an error.
+func (c *DifyClient) ImportApp(ctx context.Context, req AppImportRequest) (*ImportResult, error) {
+	payload := map[string]any{
+		"mode":         "yaml-content",
+		"yaml_content": req.YAMLContent,
+	}
+	if req.Name != "" {
+		payload["name"] = req.Name
+	}
+	if req.Description != "" {
+		payload["description"] = req.Description
+	}
+	if req.AppID != "" {
+		payload["app_id"] = req.AppID
+	}
+	if req.DraftHash != "" {
+		payload["draft_hash"] = req.DraftHash
+	}
+
+	resp, err := c.doRequest(ctx, http.MethodPost, c.workspaceURL("/apps/imports"), payload)
 	if err != nil {
 		return nil, err
 	}
 
-	var result AppResponse
-	if err := readResponseBody(resp, &result); err != nil {
-		return nil, err
-	}
-
-	return &result, nil
-}
-
-// UpdateApp updates an app by re-importing DSL.
-func (c *DifyClient) UpdateApp(ctx context.Context, appID string, req AppUpdateRequest) (*ImportResponse, error) {
-	url := fmt.Sprintf("%s/admin/api/provisioning/workspaces/%s/apps/%s", c.BaseURL, c.WorkspaceID, appID)
-	resp, err := c.doRequest(ctx, http.MethodPut, url, req)
+	result, err := readImportResult(resp)
 	if err != nil {
 		return nil, err
 	}
 
-	var result ImportResponse
-	if err := readResponseBody(resp, &result); err != nil {
+	if result.Status == importStatusPending {
+		result, err = c.confirmImport(ctx, result.ID)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	if result.Status == importStatusFailed {
+		return nil, fmt.Errorf("DSL import failed: %s", result.Error)
+	}
+
+	return result, nil
+}
+
+// confirmImport confirms a pending DSL import.
+func (c *DifyClient) confirmImport(ctx context.Context, importID string) (*ImportResult, error) {
+	url := c.workspaceURL("/apps/imports/" + url.PathEscape(importID) + ":confirm")
+	resp, err := c.doRequest(ctx, http.MethodPost, url, nil)
+	if err != nil {
 		return nil, err
 	}
 
-	if result.Status == "failed" {
-		return nil, fmt.Errorf("import failed: %s", result.Error)
+	result, err := readImportResult(resp)
+	if err != nil {
+		return nil, err
 	}
 
+	if result.Status == importStatusFailed {
+		return nil, fmt.Errorf("DSL import failed: %s", result.Error)
+	}
+
+	return result, nil
+}
+
+// AppExport is the response of GET /apps/{app_id}/dsl.
+type AppExport struct {
+	Data      string `json:"data"`
+	DraftHash string `json:"draft_hash"`
+}
+
+// ExportAppDSL exports an app's current draft DSL.
+func (c *DifyClient) ExportAppDSL(ctx context.Context, appID string) (*AppExport, error) {
+	url := fmt.Sprintf("%s/apps/%s/dsl", c.BaseURL, url.PathEscape(appID))
+	var result AppExport
+	if err := c.doJSON(ctx, http.MethodGet, url, nil, &result); err != nil {
+		return nil, err
+	}
 	return &result, nil
 }
 
-// DeleteApp deletes an app.
+// DeleteApp deletes an app; a 404 is reported as an APIError for the caller to ignore.
 func (c *DifyClient) DeleteApp(ctx context.Context, appID string) error {
-	url := fmt.Sprintf("%s/admin/api/provisioning/workspaces/%s/apps/%s", c.BaseURL, c.WorkspaceID, appID)
-	resp, err := c.doRequest(ctx, http.MethodDelete, url, nil)
-	if err != nil {
-		return err
-	}
-
-	return readResponseBody(resp, nil)
+	url := fmt.Sprintf("%s/apps/%s", c.BaseURL, url.PathEscape(appID))
+	return c.doJSON(ctx, http.MethodDelete, url, nil, nil)
 }
 
-// ListApps lists apps in the workspace.
-func (c *DifyClient) ListApps(ctx context.Context) (*AppListResponse, error) {
-	url := c.provisioningURL("/apps")
-	resp, err := c.doRequest(ctx, http.MethodGet, url, nil)
-	if err != nil {
+// AppListItem is one row of GET /apps.
+type AppListItem struct {
+	ID          string `json:"id"`
+	Name        string `json:"name"`
+	Description string `json:"description"`
+	Mode        string `json:"mode"`
+	UpdatedAt   string `json:"updated_at"`
+}
+
+type appListResponse struct {
+	HasMore bool          `json:"has_more"`
+	Data    []AppListItem `json:"data"`
+}
+
+// ListApps returns the first page (limit 100) of apps whose name contains the
+// given substring; an app id passed as name returns that one app.
+func (c *DifyClient) ListApps(ctx context.Context, name string) ([]AppListItem, error) {
+	query := url.Values{}
+	query.Set("workspace_id", c.WorkspaceID)
+	query.Set("page", "1")
+	query.Set("limit", "100")
+	if name != "" {
+		query.Set("name", name)
+	}
+
+	url := fmt.Sprintf("%s/apps?%s", c.BaseURL, query.Encode())
+	var result appListResponse
+	if err := c.doJSON(ctx, http.MethodGet, url, nil, &result); err != nil {
 		return nil, err
 	}
-
-	var result AppListResponse
-	if err := readResponseBody(resp, &result); err != nil {
-		return nil, err
-	}
-
-	return &result, nil
-}
-
-// ---------------------------------------------------------------------------
-// Model Provider Credential API
-// ---------------------------------------------------------------------------
-
-// CredentialCreateRequest is the payload for creating a credential.
-type CredentialCreateRequest struct {
-	Credentials map[string]any `json:"credentials"`
-	Name        string         `json:"name,omitempty"`
-}
-
-// CredentialUpdateRequest is the payload for updating a credential.
-type CredentialUpdateRequest struct {
-	CredentialID string         `json:"credential_id"`
-	Credentials  map[string]any `json:"credentials"`
-	Name         string         `json:"name,omitempty"`
-}
-
-// CredentialDeleteRequest is the payload for deleting a credential.
-type CredentialDeleteRequest struct {
-	CredentialID string `json:"credential_id"`
-}
-
-// CredentialSwitchRequest is the payload for switching active credential.
-type CredentialSwitchRequest struct {
-	CredentialID string `json:"credential_id"`
-}
-
-// CredentialResponse is the response from the credential API.
-type CredentialResponse struct {
-	Credentials  map[string]any `json:"credentials"`
-	CredentialID string         `json:"credential_id"`
-}
-
-// CredentialCreateResponse is the response from creating a credential.
-type CredentialCreateResponse struct {
-	Result       string `json:"result"`
-	CredentialID string `json:"credential_id"`
-}
-
-// ModelProvider represents a model provider.
-type ModelProvider struct {
-	Provider string `json:"provider"`
-}
-
-// ModelProviderListResponse is the response from listing model providers.
-type ModelProviderListResponse struct {
-	Data []ModelProvider `json:"data"`
-}
-
-// GetCredential retrieves credentials for a model provider.
-func (c *DifyClient) GetCredential(ctx context.Context, provider string) (*CredentialResponse, error) {
-	url := fmt.Sprintf("%s/admin/api/provisioning/workspaces/%s/model-providers/%s/credentials", c.BaseURL, c.WorkspaceID, provider)
-	resp, err := c.doRequest(ctx, http.MethodGet, url, nil)
-	if err != nil {
-		return nil, err
-	}
-
-	var result CredentialResponse
-	if err := readResponseBody(resp, &result); err != nil {
-		return nil, err
-	}
-
-	return &result, nil
-}
-
-// CreateCredential creates a new credential for a model provider.
-func (c *DifyClient) CreateCredential(ctx context.Context, provider string, req CredentialCreateRequest) (*CredentialCreateResponse, error) {
-	url := fmt.Sprintf("%s/admin/api/provisioning/workspaces/%s/model-providers/%s/credentials", c.BaseURL, c.WorkspaceID, provider)
-	resp, err := c.doRequest(ctx, http.MethodPost, url, req)
-	if err != nil {
-		return nil, err
-	}
-
-	var result CredentialCreateResponse
-	if err := readResponseBody(resp, &result); err != nil {
-		return nil, err
-	}
-
-	return &result, nil
-}
-
-// UpdateCredential updates an existing credential for a model provider.
-func (c *DifyClient) UpdateCredential(ctx context.Context, provider string, req CredentialUpdateRequest) error {
-	url := fmt.Sprintf("%s/admin/api/provisioning/workspaces/%s/model-providers/%s/credentials", c.BaseURL, c.WorkspaceID, provider)
-	resp, err := c.doRequest(ctx, http.MethodPut, url, req)
-	if err != nil {
-		return err
-	}
-
-	return readResponseBody(resp, nil)
-}
-
-// DeleteCredential deletes a credential for a model provider.
-func (c *DifyClient) DeleteCredential(ctx context.Context, provider string, req CredentialDeleteRequest) error {
-	url := fmt.Sprintf("%s/admin/api/provisioning/workspaces/%s/model-providers/%s/credentials", c.BaseURL, c.WorkspaceID, provider)
-	resp, err := c.doRequest(ctx, http.MethodDelete, url, req)
-	if err != nil {
-		return err
-	}
-
-	return readResponseBody(resp, nil)
-}
-
-// SwitchCredential switches the active credential for a model provider.
-func (c *DifyClient) SwitchCredential(ctx context.Context, provider string, req CredentialSwitchRequest) error {
-	url := fmt.Sprintf("%s/admin/api/provisioning/workspaces/%s/model-providers/%s/credentials/switch", c.BaseURL, c.WorkspaceID, provider)
-	resp, err := c.doRequest(ctx, http.MethodPost, url, req)
-	if err != nil {
-		return err
-	}
-
-	return readResponseBody(resp, nil)
-}
-
-// ListModelProviders lists model providers in the workspace.
-func (c *DifyClient) ListModelProviders(ctx context.Context) (*ModelProviderListResponse, error) {
-	url := fmt.Sprintf("%s/admin/api/provisioning/workspaces/%s/model-providers", c.BaseURL, c.WorkspaceID)
-	resp, err := c.doRequest(ctx, http.MethodGet, url, nil)
-	if err != nil {
-		return nil, err
-	}
-
-	var result ModelProviderListResponse
-	if err := readResponseBody(resp, &result); err != nil {
-		return nil, err
-	}
-
-	return &result, nil
-}
-
-// ---------------------------------------------------------------------------
-// Tool Provider Credential API
-// ---------------------------------------------------------------------------
-
-// GetToolCredential retrieves credentials for a builtin tool provider.
-func (c *DifyClient) GetToolCredential(ctx context.Context, provider string) (*CredentialResponse, error) {
-	url := fmt.Sprintf("%s/admin/api/provisioning/workspaces/%s/tool-providers/%s/credentials", c.BaseURL, c.WorkspaceID, provider)
-	resp, err := c.doRequest(ctx, http.MethodGet, url, nil)
-	if err != nil {
-		return nil, err
-	}
-
-	var result CredentialResponse
-	if err := readResponseBody(resp, &result); err != nil {
-		return nil, err
-	}
-
-	return &result, nil
-}
-
-// CreateToolCredential creates a new credential for a builtin tool provider.
-func (c *DifyClient) CreateToolCredential(ctx context.Context, provider string, req CredentialCreateRequest) (*CredentialCreateResponse, error) {
-	url := fmt.Sprintf("%s/admin/api/provisioning/workspaces/%s/tool-providers/%s/credentials", c.BaseURL, c.WorkspaceID, provider)
-	resp, err := c.doRequest(ctx, http.MethodPost, url, req)
-	if err != nil {
-		return nil, err
-	}
-
-	var result CredentialCreateResponse
-	if err := readResponseBody(resp, &result); err != nil {
-		return nil, err
-	}
-
-	return &result, nil
-}
-
-// UpdateToolCredential updates an existing credential for a builtin tool provider.
-func (c *DifyClient) UpdateToolCredential(ctx context.Context, provider string, req CredentialUpdateRequest) error {
-	url := fmt.Sprintf("%s/admin/api/provisioning/workspaces/%s/tool-providers/%s/credentials", c.BaseURL, c.WorkspaceID, provider)
-	resp, err := c.doRequest(ctx, http.MethodPut, url, req)
-	if err != nil {
-		return err
-	}
-
-	return readResponseBody(resp, nil)
-}
-
-// DeleteToolCredential deletes a credential for a builtin tool provider.
-func (c *DifyClient) DeleteToolCredential(ctx context.Context, provider string, req CredentialDeleteRequest) error {
-	url := fmt.Sprintf("%s/admin/api/provisioning/workspaces/%s/tool-providers/%s/credentials", c.BaseURL, c.WorkspaceID, provider)
-	resp, err := c.doRequest(ctx, http.MethodDelete, url, req)
-	if err != nil {
-		return err
-	}
-
-	return readResponseBody(resp, nil)
-}
-
-// ---------------------------------------------------------------------------
-// Plugin API
-// ---------------------------------------------------------------------------
-
-// PluginInstallMarketplaceRequest is the payload for installing plugins from marketplace.
-type PluginInstallMarketplaceRequest struct {
-	PluginUniqueIdentifiers []string `json:"plugin_unique_identifiers"`
-}
-
-// PluginInstallGithubRequest is the payload for installing a plugin from GitHub.
-type PluginInstallGithubRequest struct {
-	PluginUniqueIdentifier string `json:"plugin_unique_identifier"`
-	Repo                   string `json:"repo"`
-	Version                string `json:"version"`
-	Package                string `json:"package"`
-}
-
-// PluginUninstallRequest is the payload for uninstalling a plugin.
-type PluginUninstallRequest struct {
-	PluginInstallationID string `json:"plugin_installation_id"`
-}
-
-// PluginItem represents an installed plugin.
-type PluginItem struct {
-	PluginID               string `json:"plugin_id"`
-	PluginUniqueIdentifier string `json:"plugin_unique_identifier"`
-	PluginInstallationID   string `json:"plugin_installation_id"`
-	Name                   string `json:"name"`
-}
-
-// PluginListResponse is the response from listing plugins.
-type PluginListResponse struct {
-	Plugins []PluginItem `json:"plugins"`
-	Total   int          `json:"total"`
-}
-
-// InstallPluginsFromMarketplace installs plugins from marketplace.
-func (c *DifyClient) InstallPluginsFromMarketplace(ctx context.Context, req PluginInstallMarketplaceRequest) error {
-	url := c.provisioningURL("/plugins/install/marketplace")
-	resp, err := c.doRequest(ctx, http.MethodPost, url, req)
-	if err != nil {
-		return err
-	}
-
-	return readResponseBody(resp, nil)
-}
-
-// InstallPluginFromGithub installs a plugin from GitHub.
-func (c *DifyClient) InstallPluginFromGithub(ctx context.Context, req PluginInstallGithubRequest) error {
-	url := c.provisioningURL("/plugins/install/github")
-	resp, err := c.doRequest(ctx, http.MethodPost, url, req)
-	if err != nil {
-		return err
-	}
-
-	return readResponseBody(resp, nil)
-}
-
-// UninstallPlugin uninstalls a plugin.
-func (c *DifyClient) UninstallPlugin(ctx context.Context, req PluginUninstallRequest) error {
-	url := c.provisioningURL("/plugins/uninstall")
-	resp, err := c.doRequest(ctx, http.MethodPost, url, req)
-	if err != nil {
-		return err
-	}
-
-	return readResponseBody(resp, nil)
-}
-
-// ListPlugins lists installed plugins in the workspace.
-func (c *DifyClient) ListPlugins(ctx context.Context) (*PluginListResponse, error) {
-	url := c.provisioningURL("/plugins")
-	resp, err := c.doRequest(ctx, http.MethodGet, url, nil)
-	if err != nil {
-		return nil, err
-	}
-
-	var result PluginListResponse
-	if err := readResponseBody(resp, &result); err != nil {
-		return nil, err
-	}
-
-	return &result, nil
+	return result.Data, nil
 }
 
 // ---------------------------------------------------------------------------
 // App API Key API
 // ---------------------------------------------------------------------------
 
-// APIKeyItem represents an API key.
-type APIKeyItem struct {
-	ID        string `json:"id"`
-	Token     string `json:"token"`
-	CreatedAt string `json:"created_at"`
+// AppAPIKey is one app API key row. created_at/last_used_at are unix seconds.
+type AppAPIKey struct {
+	ID         string `json:"id"`
+	Token      string `json:"token"`
+	CreatedAt  *int64 `json:"created_at"`
+	LastUsedAt *int64 `json:"last_used_at"`
 }
 
-// APIKeyListResponse is the response from listing API keys.
-type APIKeyListResponse struct {
-	Data []APIKeyItem `json:"data"`
+type appAPIKeyListResponse struct {
+	Data []AppAPIKey `json:"data"`
 }
 
-// CreateAppAPIKey creates a new API key for an app.
-func (c *DifyClient) CreateAppAPIKey(ctx context.Context, appID string) (*APIKeyItem, error) {
-	url := fmt.Sprintf("%s/admin/api/provisioning/workspaces/%s/apps/%s/api-keys", c.BaseURL, c.WorkspaceID, appID)
-	resp, err := c.doRequest(ctx, http.MethodPost, url, nil)
-	if err != nil {
+// CreateAppAPIKey creates an API key for an app (201 with the full token).
+func (c *DifyClient) CreateAppAPIKey(ctx context.Context, appID string) (*AppAPIKey, error) {
+	url := fmt.Sprintf("%s/apps/%s/api-keys", c.BaseURL, url.PathEscape(appID))
+	var result AppAPIKey
+	if err := c.doJSON(ctx, http.MethodPost, url, nil, &result); err != nil {
 		return nil, err
 	}
-
-	var result APIKeyItem
-	if err := readResponseBody(resp, &result); err != nil {
-		return nil, err
-	}
-
 	return &result, nil
 }
 
 // ListAppAPIKeys lists API keys for an app.
-func (c *DifyClient) ListAppAPIKeys(ctx context.Context, appID string) (*APIKeyListResponse, error) {
-	url := fmt.Sprintf("%s/admin/api/provisioning/workspaces/%s/apps/%s/api-keys", c.BaseURL, c.WorkspaceID, appID)
-	resp, err := c.doRequest(ctx, http.MethodGet, url, nil)
-	if err != nil {
+func (c *DifyClient) ListAppAPIKeys(ctx context.Context, appID string) ([]AppAPIKey, error) {
+	url := fmt.Sprintf("%s/apps/%s/api-keys", c.BaseURL, url.PathEscape(appID))
+	var result appAPIKeyListResponse
+	if err := c.doJSON(ctx, http.MethodGet, url, nil, &result); err != nil {
 		return nil, err
 	}
-
-	var result APIKeyListResponse
-	if err := readResponseBody(resp, &result); err != nil {
-		return nil, err
-	}
-
-	return &result, nil
+	return result.Data, nil
 }
 
 // DeleteAppAPIKey deletes an API key for an app.
-func (c *DifyClient) DeleteAppAPIKey(ctx context.Context, appID, apiKeyID string) error {
-	url := fmt.Sprintf("%s/admin/api/provisioning/workspaces/%s/apps/%s/api-keys/%s", c.BaseURL, c.WorkspaceID, appID, apiKeyID)
-	resp, err := c.doRequest(ctx, http.MethodDelete, url, nil)
-	if err != nil {
+func (c *DifyClient) DeleteAppAPIKey(ctx context.Context, appID, keyID string) error {
+	url := fmt.Sprintf("%s/apps/%s/api-keys/%s", c.BaseURL, url.PathEscape(appID), url.PathEscape(keyID))
+	return c.doJSON(ctx, http.MethodDelete, url, nil, nil)
+}
+
+// ---------------------------------------------------------------------------
+// Provider credentials (model and tool providers share the shape)
+// ---------------------------------------------------------------------------
+
+// CredentialRef is a saved credential reference (id + optional name).
+type CredentialRef struct {
+	ID   string  `json:"id"`
+	Name *string `json:"name"`
+}
+
+// CredentialWriteResult mirrors CredentialWriteResponse {id, name, active}.
+type CredentialWriteResult struct {
+	ID     string  `json:"id"`
+	Name   *string `json:"name"`
+	Active bool    `json:"active"`
+}
+
+type credentialWriteRequest struct {
+	Credentials map[string]any `json:"credentials"`
+	Name        string         `json:"name,omitempty"`
+}
+
+type providerDescribeResponse struct {
+	Credentials       []CredentialRef `json:"credentials"`
+	ActiveCredential  *CredentialRef  `json:"active_credential"`
+	DefaultCredential *CredentialRef  `json:"default_credential"`
+}
+
+// credentialIDList returns the ids of a provider's saved credentials.
+func credentialIDs(creds []CredentialRef) map[string]CredentialRef {
+	out := make(map[string]CredentialRef, len(creds))
+	for _, c := range creds {
+		out[c.ID] = c
+	}
+	return out
+}
+
+// activeCredentialID returns the id of the credential the provider currently uses
+// (active_credential for model providers, default_credential for tool providers).
+func activeCredentialID(d *providerDescribeResponse) string {
+	if d.ActiveCredential != nil {
+		return d.ActiveCredential.ID
+	}
+	if d.DefaultCredential != nil {
+		return d.DefaultCredential.ID
+	}
+	return ""
+}
+
+// credentialName returns the saved name for id, or "" when absent.
+func credentialName(creds map[string]CredentialRef, id string) string {
+	if ref, ok := creds[id]; ok && ref.Name != nil {
+		return *ref.Name
+	}
+	return ""
+}
+
+func (c *DifyClient) describeProvider(ctx context.Context, kind, provider string) (*providerDescribeResponse, error) {
+	// provider is a <path:provider> route segment (e.g. langgenius/openai/openai)
+	// and must be interpolated unescaped so its slashes stay path separators.
+	url := c.workspaceURL("/" + kind + "s/" + provider)
+	var result providerDescribeResponse
+	if err := c.doJSON(ctx, http.MethodGet, url, nil, &result); err != nil {
+		return nil, err
+	}
+	return &result, nil
+}
+
+func (c *DifyClient) writeCredential(ctx context.Context, method, kind, provider, credentialID string, credentials map[string]any, name string) (*CredentialWriteResult, error) {
+	base := c.workspaceURL("/" + kind + "s/" + provider + "/credentials")
+	if credentialID != "" {
+		base += "/" + url.PathEscape(credentialID)
+	}
+	var result CredentialWriteResult
+	if err := c.doJSON(ctx, method, base, credentialWriteRequest{Credentials: credentials, Name: name}, &result); err != nil {
+		return nil, err
+	}
+	return &result, nil
+}
+
+func (c *DifyClient) deleteCredential(ctx context.Context, kind, provider, credentialID string) error {
+	url := c.workspaceURL("/" + kind + "s/" + provider + "/credentials/" + url.PathEscape(credentialID))
+	return c.doJSON(ctx, http.MethodDelete, url, nil, nil)
+}
+
+// DescribeModelProvider returns the saved credentials of a model provider.
+func (c *DifyClient) DescribeModelProvider(ctx context.Context, provider string) (*providerDescribeResponse, error) {
+	return c.describeProvider(ctx, "model-provider", provider)
+}
+
+// CreateModelCredential saves a credential for a model provider (201).
+func (c *DifyClient) CreateModelCredential(ctx context.Context, provider string, credentials map[string]any, name string) (*CredentialWriteResult, error) {
+	return c.writeCredential(ctx, http.MethodPost, "model-provider", provider, "", credentials, name)
+}
+
+// UpdateModelCredential replaces a saved model provider credential (200).
+func (c *DifyClient) UpdateModelCredential(ctx context.Context, provider, credentialID string, credentials map[string]any, name string) (*CredentialWriteResult, error) {
+	return c.writeCredential(ctx, http.MethodPatch, "model-provider", provider, credentialID, credentials, name)
+}
+
+// DeleteModelCredential deletes a saved model provider credential.
+func (c *DifyClient) DeleteModelCredential(ctx context.Context, provider, credentialID string) error {
+	return c.deleteCredential(ctx, "model-provider", provider, credentialID)
+}
+
+// DescribeToolProvider returns the saved credentials of a tool provider.
+func (c *DifyClient) DescribeToolProvider(ctx context.Context, provider string) (*providerDescribeResponse, error) {
+	return c.describeProvider(ctx, "tool-provider", provider)
+}
+
+// CreateToolCredential saves a credential for a tool provider (201).
+func (c *DifyClient) CreateToolCredential(ctx context.Context, provider string, credentials map[string]any, name string) (*CredentialWriteResult, error) {
+	return c.writeCredential(ctx, http.MethodPost, "tool-provider", provider, "", credentials, name)
+}
+
+// UpdateToolCredential replaces a saved tool provider credential (200).
+func (c *DifyClient) UpdateToolCredential(ctx context.Context, provider, credentialID string, credentials map[string]any, name string) (*CredentialWriteResult, error) {
+	return c.writeCredential(ctx, http.MethodPatch, "tool-provider", provider, credentialID, credentials, name)
+}
+
+// DeleteToolCredential deletes a saved tool provider credential.
+func (c *DifyClient) DeleteToolCredential(ctx context.Context, provider, credentialID string) error {
+	return c.deleteCredential(ctx, "tool-provider", provider, credentialID)
+}
+
+// ---------------------------------------------------------------------------
+// Plugin API
+// ---------------------------------------------------------------------------
+
+// PluginInstallStart is the response of POST /plugins:install.
+type PluginInstallStart struct {
+	TaskID       string `json:"task_id"`
+	AllInstalled bool   `json:"all_installed"`
+}
+
+// PluginTaskPlugin is one plugin row inside a plugin task.
+type PluginTaskPlugin struct {
+	PluginID   string `json:"plugin_id"`
+	Identifier string `json:"identifier"`
+	Status     string `json:"status"`
+	Message    string `json:"message"`
+}
+
+// PluginTask is the response of GET /plugin-tasks/{task_id}.
+type PluginTask struct {
+	TaskID  string             `json:"task_id"`
+	Status  string             `json:"status"`
+	Plugins []PluginTaskPlugin `json:"plugins"`
+}
+
+const (
+	pluginTaskPending = "pending"
+	pluginTaskRunning = "running"
+	pluginTaskSuccess = "success"
+	pluginTaskFailed  = "failed"
+)
+
+// pluginTask fetches the current state of a plugin install task.
+func (c *DifyClient) pluginTask(ctx context.Context, taskID string) (*PluginTask, error) {
+	url := c.workspaceURL("/plugin-tasks/" + url.PathEscape(taskID))
+	var result PluginTask
+	if err := c.doJSON(ctx, http.MethodGet, url, nil, &result); err != nil {
+		return nil, err
+	}
+	return &result, nil
+}
+
+// waitForPluginTask polls a plugin install task until it succeeds or fails.
+func (c *DifyClient) waitForPluginTask(ctx context.Context, taskID string) error {
+	deadline := time.Now().Add(c.pluginPollTimeout)
+	for {
+		task, err := c.pluginTask(ctx, taskID)
+		if err != nil {
+			return fmt.Errorf("failed to check plugin install task: %w", err)
+		}
+
+		switch task.Status {
+		case pluginTaskSuccess:
+			return nil
+		case pluginTaskFailed:
+			messages := make([]string, 0, len(task.Plugins))
+			for _, p := range task.Plugins {
+				if p.Message != "" {
+					messages = append(messages, p.Message)
+				}
+			}
+			if len(messages) == 0 {
+				messages = append(messages, "unknown error")
+			}
+			return fmt.Errorf("plugin install task %s failed: %s", taskID, strings.Join(messages, "; "))
+		}
+
+		if !time.Now().Before(deadline) {
+			return fmt.Errorf("plugin install task %s did not finish within %s", taskID, c.pluginPollTimeout)
+		}
+
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(c.pluginPollInterval):
+		}
+	}
+}
+
+// InstallPlugin starts a marketplace plugin install and waits for the task to
+// finish when the server reports the install is still in flight.
+func (c *DifyClient) InstallPlugin(ctx context.Context, identifier string) error {
+	url := c.workspaceURL("/plugins:install")
+	var start PluginInstallStart
+	if err := c.doJSON(ctx, http.MethodPost, url, map[string]any{
+		"identifiers": []string{identifier},
+	}, &start); err != nil {
 		return err
 	}
 
-	return readResponseBody(resp, nil)
+	if start.AllInstalled {
+		return nil
+	}
+	return c.waitForPluginTask(ctx, start.TaskID)
+}
+
+// PluginInfo is one installed plugin row.
+type PluginInfo struct {
+	PluginID   string `json:"plugin_id"`
+	Identifier string `json:"identifier"`
+	Version    string `json:"version"`
+	Category   string `json:"category"`
+	Source     string `json:"source"`
+}
+
+type pluginListResponse struct {
+	Data []PluginInfo `json:"data"`
+}
+
+// ListPlugins lists plugins installed in the workspace.
+func (c *DifyClient) ListPlugins(ctx context.Context) ([]PluginInfo, error) {
+	var result pluginListResponse
+	if err := c.doJSON(ctx, http.MethodGet, c.workspaceURL("/plugins"), nil, &result); err != nil {
+		return nil, err
+	}
+	return result.Data, nil
+}
+
+// UninstallPlugin uninstalls a plugin by plugin_id (e.g. langgenius/openai).
+// plugin_id is a <path:plugin_id> route segment and is interpolated unescaped.
+func (c *DifyClient) UninstallPlugin(ctx context.Context, pluginID string) error {
+	url := c.workspaceURL("/plugins/" + pluginID)
+	return c.doJSON(ctx, http.MethodDelete, url, nil, nil)
 }
 
 // ---------------------------------------------------------------------------
-// Dataset API
+// Models API (data source)
 // ---------------------------------------------------------------------------
 
-// Dataset represents a Dify dataset.
-type Dataset struct {
-	ID                     string         `json:"id"`
-	Name                   string         `json:"name"`
-	Description            string         `json:"description"`
-	IndexingTechnique      string         `json:"indexing_technique"`
-	Permission             string         `json:"permission"`
-	ProcessRule            map[string]any `json:"process_rule"`
-	EmbeddingModel         string         `json:"embedding_model"`
-	EmbeddingModelProvider string         `json:"embedding_model_provider"`
+// ModelInfo is one model row of GET /workspaces/{ws}/models.
+type ModelInfo struct {
+	Provider  string `json:"provider"`
+	Model     string `json:"model"`
+	ModelType string `json:"model_type"`
+	Status    string `json:"status"`
 }
 
-// DatasetCreateRequest is the payload for creating a dataset.
-type DatasetCreateRequest struct {
-	Name                   string         `json:"name"`
-	Description            string         `json:"description"`
-	IndexingTechnique      string         `json:"indexing_technique,omitempty"`
-	Permission             string         `json:"permission,omitempty"`
-	ProcessRule            map[string]any `json:"process_rule,omitempty"`
-	EmbeddingModel         string         `json:"embedding_model,omitempty"`
-	EmbeddingModelProvider string         `json:"embedding_model_provider,omitempty"`
-	CreatorEmail           string         `json:"creator_email"`
+type modelListResponse struct {
+	HasMore bool        `json:"has_more"`
+	Data    []ModelInfo `json:"data"`
 }
 
-// DatasetUpdateRequest is the payload for updating a dataset.
-type DatasetUpdateRequest struct {
-	Name                   string         `json:"name,omitempty"`
-	Description            string         `json:"description,omitempty"`
-	IndexingTechnique      string         `json:"indexing_technique,omitempty"`
-	Permission             string         `json:"permission,omitempty"`
-	ProcessRule            map[string]any `json:"process_rule,omitempty"`
-	EmbeddingModel         string         `json:"embedding_model,omitempty"`
-	EmbeddingModelProvider string         `json:"embedding_model_provider,omitempty"`
-}
+// ListModels returns every model in the workspace, following pagination.
+// provider and modelType are optional filters; empty means no filter.
+func (c *DifyClient) ListModels(ctx context.Context, provider, modelType string) ([]ModelInfo, error) {
+	var all []ModelInfo
+	for page := 1; ; page++ {
+		query := url.Values{}
+		query.Set("page", strconv.Itoa(page))
+		query.Set("limit", "100")
+		if provider != "" {
+			query.Set("provider", provider)
+		}
+		if modelType != "" {
+			query.Set("model_type", modelType)
+		}
 
-// ListDatasets lists all datasets in the workspace.
-func (c *DifyClient) ListDatasets(ctx context.Context) ([]Dataset, error) {
-	url := c.provisioningURL("/datasets")
-	resp, err := c.doRequest(ctx, http.MethodGet, url, nil)
-	if err != nil {
-		return nil, err
+		url := c.workspaceURL("/models") + "?" + query.Encode()
+		var result modelListResponse
+		if err := c.doJSON(ctx, http.MethodGet, url, nil, &result); err != nil {
+			return nil, err
+		}
+
+		all = append(all, result.Data...)
+		if !result.HasMore {
+			return all, nil
+		}
 	}
-
-	var result []Dataset
-	if err := readResponseBody(resp, &result); err != nil {
-		return nil, err
-	}
-
-	return result, nil
-}
-
-// GetDataset retrieves a dataset by ID.
-func (c *DifyClient) GetDataset(ctx context.Context, datasetID string) (*Dataset, error) {
-	url := fmt.Sprintf("%s/admin/api/provisioning/workspaces/%s/datasets/%s", c.BaseURL, c.WorkspaceID, datasetID)
-	resp, err := c.doRequest(ctx, http.MethodGet, url, nil)
-	if err != nil {
-		return nil, err
-	}
-
-	var result Dataset
-	if err := readResponseBody(resp, &result); err != nil {
-		return nil, err
-	}
-
-	return &result, nil
-}
-
-// CreateDataset creates a new dataset.
-func (c *DifyClient) CreateDataset(ctx context.Context, req DatasetCreateRequest) (*Dataset, error) {
-	url := c.provisioningURL("/datasets")
-	resp, err := c.doRequest(ctx, http.MethodPost, url, req)
-	if err != nil {
-		return nil, err
-	}
-
-	var result Dataset
-	if err := readResponseBody(resp, &result); err != nil {
-		return nil, err
-	}
-
-	return &result, nil
-}
-
-// UpdateDataset updates a dataset.
-func (c *DifyClient) UpdateDataset(ctx context.Context, datasetID string, req DatasetUpdateRequest) (*Dataset, error) {
-	url := fmt.Sprintf("%s/admin/api/provisioning/workspaces/%s/datasets/%s", c.BaseURL, c.WorkspaceID, datasetID)
-	resp, err := c.doRequest(ctx, http.MethodPatch, url, req)
-	if err != nil {
-		return nil, err
-	}
-
-	var result Dataset
-	if err := readResponseBody(resp, &result); err != nil {
-		return nil, err
-	}
-
-	return &result, nil
-}
-
-// DeleteDataset deletes a dataset.
-func (c *DifyClient) DeleteDataset(ctx context.Context, datasetID string) error {
-	url := fmt.Sprintf("%s/admin/api/provisioning/workspaces/%s/datasets/%s", c.BaseURL, c.WorkspaceID, datasetID)
-	resp, err := c.doRequest(ctx, http.MethodDelete, url, nil)
-	if err != nil {
-		return err
-	}
-
-	return readResponseBody(resp, nil)
-}
-
-// ---------------------------------------------------------------------------
-// Dataset Document API
-// ---------------------------------------------------------------------------
-
-// DatasetDocument represents a document in a dataset.
-type DatasetDocument struct {
-	ID                     string `json:"id"`
-	DatasetID              string `json:"dataset_id"`
-	Name                   string `json:"name"`
-	DataSourceType         string `json:"data_source_type"`
-	IndexingStatus         string `json:"indexing_status"`
-	IndexingTechnique      string `json:"indexing_technique"`
-	EmbeddingModel         string `json:"embedding_model"`
-	EmbeddingModelProvider string `json:"embedding_model_provider"`
-}
-
-// DatasetDocumentCreateRequest is the payload for creating a document.
-type DatasetDocumentCreateRequest struct {
-	DataSourceType         string         `json:"data_source_type"`
-	DataSourceInfo         map[string]any `json:"data_source_info"`
-	IndexingTechnique      string         `json:"indexing_technique,omitempty"`
-	EmbeddingModel         string         `json:"embedding_model,omitempty"`
-	EmbeddingModelProvider string         `json:"embedding_model_provider,omitempty"`
-	CreatorEmail           string         `json:"creator_email"`
-}
-
-// GetDatasetDocument retrieves a document by ID.
-func (c *DifyClient) GetDatasetDocument(ctx context.Context, datasetID, documentID string) (*DatasetDocument, error) {
-	url := fmt.Sprintf("%s/admin/api/provisioning/workspaces/%s/datasets/%s/documents/%s", c.BaseURL, c.WorkspaceID, datasetID, documentID)
-	resp, err := c.doRequest(ctx, http.MethodGet, url, nil)
-	if err != nil {
-		return nil, err
-	}
-
-	var result DatasetDocument
-	if err := readResponseBody(resp, &result); err != nil {
-		return nil, err
-	}
-
-	return &result, nil
-}
-
-// CreateDatasetDocument creates a new document in a dataset.
-func (c *DifyClient) CreateDatasetDocument(ctx context.Context, datasetID string, req DatasetDocumentCreateRequest) (*DatasetDocument, error) {
-	url := fmt.Sprintf("%s/admin/api/provisioning/workspaces/%s/datasets/%s/documents", c.BaseURL, c.WorkspaceID, datasetID)
-	resp, err := c.doRequest(ctx, http.MethodPost, url, req)
-	if err != nil {
-		return nil, err
-	}
-
-	var result DatasetDocument
-	if err := readResponseBody(resp, &result); err != nil {
-		return nil, err
-	}
-
-	return &result, nil
-}
-
-// DeleteDatasetDocument deletes a document.
-func (c *DifyClient) DeleteDatasetDocument(ctx context.Context, datasetID, documentID string) error {
-	url := fmt.Sprintf("%s/admin/api/provisioning/workspaces/%s/datasets/%s/documents/%s", c.BaseURL, c.WorkspaceID, datasetID, documentID)
-	resp, err := c.doRequest(ctx, http.MethodDelete, url, nil)
-	if err != nil {
-		return err
-	}
-
-	return readResponseBody(resp, nil)
 }

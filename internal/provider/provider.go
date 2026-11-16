@@ -25,7 +25,7 @@ type DifyProvider struct {
 // DifyProviderModel describes the provider data model.
 type DifyProviderModel struct {
 	Host        types.String `tfsdk:"host"`
-	APIKey      types.String `tfsdk:"api_key"`
+	Token       types.String `tfsdk:"token"`
 	WorkspaceID types.String `tfsdk:"workspace_id"`
 }
 
@@ -36,18 +36,20 @@ func (p *DifyProvider) Metadata(ctx context.Context, req provider.MetadataReques
 
 func (p *DifyProvider) Schema(ctx context.Context, req provider.SchemaRequest, resp *provider.SchemaResponse) {
 	resp.Schema = schema.Schema{
-		MarkdownDescription: "The Dify provider allows managing Dify applications, model provider credentials, " +
-			"plugins, and API keys as infrastructure-as-code via Terraform.",
+		MarkdownDescription: "The Dify provider manages Dify applications, model and tool provider " +
+			"credentials, plugin installs, and app API keys as infrastructure-as-code via Terraform. " +
+			"It authenticates with a Personal Access Token against the workspace-scoped OpenAPI.",
 
 		Attributes: map[string]schema.Attribute{
 			"host": schema.StringAttribute{
-				MarkdownDescription: "Dify API base URL (e.g. `https://dify.example.com`). " +
-					"Can also be set via `DIFY_HOST` environment variable.",
+				MarkdownDescription: "Dify base URL (e.g. `https://dify.example.com`). The provider calls " +
+					"`<host>/openapi/v1`. Can also be set via `DIFY_HOST` environment variable.",
 				Optional: true,
 			},
-			"api_key": schema.StringAttribute{
-				MarkdownDescription: "Admin API key for authentication (X-Admin-Api-Key header). " +
-					"Can also be set via `DIFY_API_KEY` environment variable.",
+			"token": schema.StringAttribute{
+				MarkdownDescription: "Personal Access Token for authentication (`Authorization: Bearer` header). " +
+					"Create one in the Dify console under account settings → Personal Access Tokens; " +
+					"it must be scoped to the workspace. Can also be set via `DIFY_TOKEN` environment variable.",
 				Optional:  true,
 				Sensitive: true,
 			},
@@ -75,9 +77,9 @@ func (p *DifyProvider) Configure(ctx context.Context, req provider.ConfigureRequ
 		host = envOr("DIFY_HOST", "http://localhost")
 	}
 
-	apiKey := data.APIKey.ValueString()
-	if apiKey == "" {
-		apiKey = envOr("DIFY_API_KEY", "")
+	token := data.Token.ValueString()
+	if token == "" {
+		token = envOr("DIFY_TOKEN", "")
 	}
 
 	workspaceID := data.WorkspaceID.ValueString()
@@ -85,10 +87,10 @@ func (p *DifyProvider) Configure(ctx context.Context, req provider.ConfigureRequ
 		workspaceID = envOr("DIFY_WORKSPACE_ID", "")
 	}
 
-	if apiKey == "" {
+	if token == "" {
 		resp.Diagnostics.AddError(
-			"Missing Dify API Key",
-			"api_key must be provided either in the provider config or via the DIFY_API_KEY environment variable.",
+			"Missing Dify Personal Access Token",
+			"token must be provided either in the provider config or via the DIFY_TOKEN environment variable.",
 		)
 		return
 	}
@@ -101,7 +103,7 @@ func (p *DifyProvider) Configure(ctx context.Context, req provider.ConfigureRequ
 		return
 	}
 
-	client := NewDifyClient(host, apiKey, workspaceID)
+	client := NewDifyClient(host, token, workspaceID)
 	resp.DataSourceData = client
 	resp.ResourceData = client
 }
@@ -113,15 +115,13 @@ func (p *DifyProvider) Resources(ctx context.Context) []func() resource.Resource
 		NewToolProviderCredentialResource,
 		NewPluginInstallResource,
 		NewAppAPIKeyResource,
-		NewDatasetResource,
-		NewDatasetDocumentResource,
 	}
 }
 
 func (p *DifyProvider) DataSources(ctx context.Context) []func() datasource.DataSource {
 	return []func() datasource.DataSource{
 		NewAppDataSource,
-		NewModelProvidersDataSource,
+		NewModelsDataSource,
 		NewPluginsDataSource,
 	}
 }

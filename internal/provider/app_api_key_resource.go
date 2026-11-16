@@ -6,6 +6,7 @@ package provider
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
@@ -31,6 +32,14 @@ type AppAPIKeyResourceModel struct {
 	KeyID     types.String `tfsdk:"key_id"`
 	Token     types.String `tfsdk:"token"`
 	CreatedAt types.String `tfsdk:"created_at"`
+}
+
+// formatUnixTime renders a unix-seconds timestamp as RFC3339; nil becomes "".
+func formatUnixTime(unix *int64) string {
+	if unix == nil {
+		return ""
+	}
+	return time.Unix(*unix, 0).UTC().Format(time.RFC3339)
 }
 
 func (r *AppAPIKeyResource) Metadata(ctx context.Context, req resource.MetadataRequest, resp *resource.MetadataResponse) {
@@ -62,7 +71,7 @@ func (r *AppAPIKeyResource) Schema(ctx context.Context, req resource.SchemaReque
 				Sensitive:           true,
 			},
 			"created_at": schema.StringAttribute{
-				MarkdownDescription: "Creation timestamp.",
+				MarkdownDescription: "Creation timestamp (RFC3339).",
 				Computed:            true,
 			},
 		},
@@ -102,7 +111,7 @@ func (r *AppAPIKeyResource) Create(ctx context.Context, req resource.CreateReque
 
 	data.KeyID = types.StringValue(key.ID)
 	data.Token = types.StringValue(key.Token)
-	data.CreatedAt = types.StringValue(key.CreatedAt)
+	data.CreatedAt = types.StringValue(formatUnixTime(key.CreatedAt))
 
 	resp.Diagnostics.Append(resp.State.Set(ctx, &data)...)
 }
@@ -117,7 +126,7 @@ func (r *AppAPIKeyResource) Read(ctx context.Context, req resource.ReadRequest, 
 
 	keys, err := r.client.ListAppAPIKeys(ctx, data.AppID.ValueString())
 	if err != nil {
-		if apiErr, ok := err.(*APIError); ok && apiErr.StatusCode == 404 {
+		if isNotFound(err) {
 			resp.State.RemoveResource(ctx)
 			return
 		}
@@ -125,27 +134,22 @@ func (r *AppAPIKeyResource) Read(ctx context.Context, req resource.ReadRequest, 
 		return
 	}
 
-	found := false
 	keyID := data.KeyID.ValueString()
-	for _, k := range keys.Data {
+	for _, k := range keys {
 		if k.ID == keyID {
 			data.Token = types.StringValue(k.Token)
-			data.CreatedAt = types.StringValue(k.CreatedAt)
-			found = true
-			break
+			data.CreatedAt = types.StringValue(formatUnixTime(k.CreatedAt))
+			resp.Diagnostics.Append(resp.State.Set(ctx, &data)...)
+			return
 		}
 	}
 
-	if !found {
-		resp.State.RemoveResource(ctx)
-		return
-	}
-
-	resp.Diagnostics.Append(resp.State.Set(ctx, &data)...)
+	resp.State.RemoveResource(ctx)
 }
 
 func (r *AppAPIKeyResource) Update(ctx context.Context, req resource.UpdateRequest, resp *resource.UpdateResponse) {
-	// API keys are immutable — no update possible. All fields use RequiresReplace.
+	// API keys are immutable — every attribute is RequiresReplace or Computed,
+	// so Update should never run. Handle it gracefully if it does.
 	var data AppAPIKeyResourceModel
 	resp.Diagnostics.Append(req.Plan.Get(ctx, &data)...)
 	if resp.Diagnostics.HasError() {
@@ -163,7 +167,7 @@ func (r *AppAPIKeyResource) Delete(ctx context.Context, req resource.DeleteReque
 	}
 
 	err := r.client.DeleteAppAPIKey(ctx, data.AppID.ValueString(), data.KeyID.ValueString())
-	if err != nil {
+	if err != nil && !isNotFound(err) {
 		resp.Diagnostics.AddError("Client Error", fmt.Sprintf("Unable to delete API key: %s", err))
 		return
 	}

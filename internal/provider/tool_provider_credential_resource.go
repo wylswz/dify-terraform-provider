@@ -31,6 +31,7 @@ type ToolProviderCredentialResourceModel struct {
 	CredentialID types.String `tfsdk:"credential_id"`
 	Name         types.String `tfsdk:"name"`
 	Credentials  types.Map    `tfsdk:"credentials"`
+	Active       types.Bool   `tfsdk:"active"`
 }
 
 func (r *ToolProviderCredentialResource) Metadata(ctx context.Context, req resource.MetadataRequest, resp *resource.MetadataResponse) {
@@ -40,11 +41,12 @@ func (r *ToolProviderCredentialResource) Metadata(ctx context.Context, req resou
 func (r *ToolProviderCredentialResource) Schema(ctx context.Context, req resource.SchemaRequest, resp *resource.SchemaResponse) {
 	resp.Schema = schema.Schema{
 		MarkdownDescription: "Manages a builtin tool provider credential in Dify. " +
-			"Credentials are key-value pairs (e.g. `api_key`) for a specific tool provider.",
+			"`provider_name` is the provider path such as `langgenius/tavily/tavily`. " +
+			"Credential values are write-only: the API never returns them, so state keeps the configured values.",
 
 		Attributes: map[string]schema.Attribute{
 			"provider_name": schema.StringAttribute{
-				MarkdownDescription: "Tool provider name (e.g. `tavily`, `google`).",
+				MarkdownDescription: "Tool provider id (e.g. `langgenius/tavily/tavily`).",
 				Required:            true,
 				PlanModifiers: []planmodifier.String{
 					stringplanmodifier.RequiresReplace(),
@@ -58,14 +60,20 @@ func (r *ToolProviderCredentialResource) Schema(ctx context.Context, req resourc
 				},
 			},
 			"name": schema.StringAttribute{
-				MarkdownDescription: "Human-readable name for this credential.",
+				MarkdownDescription: "Human-readable name for this credential (max 30 characters).",
 				Optional:            true,
+				Computed:            true,
 			},
 			"credentials": schema.MapAttribute{
-				MarkdownDescription: "Credential key-value pairs (e.g. `api_key = \"sk-...\"`). " +
-					"Values are treated as sensitive.",
+				MarkdownDescription: "Credential key-value pairs keyed by the provider's credential form fields " +
+					"(e.g. `tavily_api_key`). Write-only and sensitive.",
 				ElementType: types.StringType,
 				Required:    true,
+				Sensitive:   true,
+			},
+			"active": schema.BoolAttribute{
+				MarkdownDescription: "Whether this is the provider's default credential.",
+				Computed:            true,
 			},
 		},
 	}
@@ -96,26 +104,13 @@ func (r *ToolProviderCredentialResource) Create(ctx context.Context, req resourc
 		return
 	}
 
-	// Convert types.Map to map[string]interface{}
-	credMap := make(map[string]any)
-	for k, v := range data.Credentials.Elements() {
-		credMap[k] = v.(types.String).ValueString()
-	}
-
-	createReq := CredentialCreateRequest{
-		Credentials: credMap,
-		Name:        data.Name.ValueString(),
-	}
-
-	createResp, err := r.client.CreateToolCredential(ctx, data.ProviderName.ValueString(), createReq)
+	res, err := r.client.CreateToolCredential(ctx, data.ProviderName.ValueString(), credentialsToMap(data.Credentials), data.Name.ValueString())
 	if err != nil {
 		resp.Diagnostics.AddError("Client Error", fmt.Sprintf("Unable to create tool credential: %s", err))
 		return
 	}
 
-	if createResp.CredentialID != "" {
-		data.CredentialID = types.StringValue(createResp.CredentialID)
-	}
+	applyCredentialWrite(&data.CredentialID, &data.Name, &data.Active, res)
 
 	resp.Diagnostics.Append(resp.State.Set(ctx, &data)...)
 }
@@ -128,23 +123,28 @@ func (r *ToolProviderCredentialResource) Read(ctx context.Context, req resource.
 		return
 	}
 
-	credResp, err := r.client.GetToolCredential(ctx, data.ProviderName.ValueString())
+	desc, err := r.client.DescribeToolProvider(ctx, data.ProviderName.ValueString())
 	if err != nil {
-		if apiErr, ok := err.(*APIError); ok && apiErr.StatusCode == 404 {
+		if isNotFound(err) {
 			resp.State.RemoveResource(ctx)
 			return
 		}
-		resp.Diagnostics.AddError("Client Error", fmt.Sprintf("Unable to read tool credential: %s", err))
+		resp.Diagnostics.AddError("Client Error", fmt.Sprintf("Unable to describe tool provider: %s", err))
 		return
 	}
 
-	// Update credential_id from response if available
-	if credResp.CredentialID != "" {
-		data.CredentialID = types.StringValue(credResp.CredentialID)
+	credentialID := data.CredentialID.ValueString()
+	creds := credentialIDs(desc.Credentials)
+	ref, ok := creds[credentialID]
+	if !ok {
+		resp.State.RemoveResource(ctx)
+		return
 	}
 
-	// Note: we don't overwrite credentials from the API response since
-	// the API masks sensitive values. We keep the TF state values.
+	if ref.Name != nil {
+		data.Name = types.StringValue(*ref.Name)
+	}
+	data.Active = types.BoolValue(activeCredentialID(desc) == credentialID)
 
 	resp.Diagnostics.Append(resp.State.Set(ctx, &data)...)
 }
@@ -157,22 +157,13 @@ func (r *ToolProviderCredentialResource) Update(ctx context.Context, req resourc
 		return
 	}
 
-	credMap := make(map[string]any)
-	for k, v := range data.Credentials.Elements() {
-		credMap[k] = v.(types.String).ValueString()
-	}
-
-	updateReq := CredentialUpdateRequest{
-		CredentialID: data.CredentialID.ValueString(),
-		Credentials:  credMap,
-		Name:         data.Name.ValueString(),
-	}
-
-	err := r.client.UpdateToolCredential(ctx, data.ProviderName.ValueString(), updateReq)
+	res, err := r.client.UpdateToolCredential(ctx, data.ProviderName.ValueString(), data.CredentialID.ValueString(), credentialsToMap(data.Credentials), data.Name.ValueString())
 	if err != nil {
 		resp.Diagnostics.AddError("Client Error", fmt.Sprintf("Unable to update tool credential: %s", err))
 		return
 	}
+
+	applyCredentialWrite(&data.CredentialID, &data.Name, &data.Active, res)
 
 	resp.Diagnostics.Append(resp.State.Set(ctx, &data)...)
 }
@@ -185,12 +176,8 @@ func (r *ToolProviderCredentialResource) Delete(ctx context.Context, req resourc
 		return
 	}
 
-	deleteReq := CredentialDeleteRequest{
-		CredentialID: data.CredentialID.ValueString(),
-	}
-
-	err := r.client.DeleteToolCredential(ctx, data.ProviderName.ValueString(), deleteReq)
-	if err != nil {
+	err := r.client.DeleteToolCredential(ctx, data.ProviderName.ValueString(), data.CredentialID.ValueString())
+	if err != nil && !isNotFound(err) {
 		resp.Diagnostics.AddError("Client Error", fmt.Sprintf("Unable to delete tool credential: %s", err))
 		return
 	}

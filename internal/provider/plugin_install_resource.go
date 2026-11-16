@@ -6,7 +6,7 @@ package provider
 import (
 	"context"
 	"fmt"
-	"time"
+	"strings"
 
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
@@ -29,11 +29,9 @@ type PluginInstallResource struct {
 // PluginInstallResourceModel describes the resource data model.
 type PluginInstallResourceModel struct {
 	PluginUniqueIdentifier types.String `tfsdk:"plugin_unique_identifier"`
-	PluginInstallationID   types.String `tfsdk:"plugin_installation_id"`
-	Source                 types.String `tfsdk:"source"`
-	Repo                   types.String `tfsdk:"repo"`
+	PluginID               types.String `tfsdk:"plugin_id"`
 	Version                types.String `tfsdk:"version"`
-	Package                types.String `tfsdk:"package"`
+	Category               types.String `tfsdk:"category"`
 }
 
 func (r *PluginInstallResource) Metadata(ctx context.Context, req resource.MetadataRequest, resp *resource.MetadataResponse) {
@@ -42,51 +40,32 @@ func (r *PluginInstallResource) Metadata(ctx context.Context, req resource.Metad
 
 func (r *PluginInstallResource) Schema(ctx context.Context, req resource.SchemaRequest, resp *resource.SchemaResponse) {
 	resp.Schema = schema.Schema{
-		MarkdownDescription: "Manages a plugin installation in Dify. Supports installing from marketplace or GitHub.",
+		MarkdownDescription: "Manages a plugin installation in the workspace. " +
+			"Only marketplace identifiers are supported (e.g. `langgenius/openai:0.3.8@<sha256>`).",
 
 		Attributes: map[string]schema.Attribute{
 			"plugin_unique_identifier": schema.StringAttribute{
-				MarkdownDescription: "Unique identifier for the plugin (e.g. `langgenius/ollama:0.0.1`).",
-				Required:            true,
+				MarkdownDescription: "Versioned plugin identifier from the marketplace " +
+					"(e.g. `langgenius/openai:0.3.8@<sha256>`).",
+				Required: true,
 				PlanModifiers: []planmodifier.String{
 					stringplanmodifier.RequiresReplace(),
 				},
 			},
-			"plugin_installation_id": schema.StringAttribute{
-				MarkdownDescription: "Installation ID (assigned by Dify after install).",
+			"plugin_id": schema.StringAttribute{
+				MarkdownDescription: "Plugin ID assigned by Dify (the identifier without the version, e.g. `langgenius/openai`).",
 				Computed:            true,
 				PlanModifiers: []planmodifier.String{
 					stringplanmodifier.UseStateForUnknown(),
 				},
 			},
-			"source": schema.StringAttribute{
-				MarkdownDescription: "Installation source: `marketplace` (default) or `github`.",
-				Optional:            true,
-				Computed:            true,
-				PlanModifiers: []planmodifier.String{
-					stringplanmodifier.RequiresReplace(),
-				},
-			},
-			"repo": schema.StringAttribute{
-				MarkdownDescription: "GitHub repository (e.g. `langgenius/dify-plugin-ollama`). Only for `github` source.",
-				Optional:            true,
-				PlanModifiers: []planmodifier.String{
-					stringplanmodifier.RequiresReplace(),
-				},
-			},
 			"version": schema.StringAttribute{
-				MarkdownDescription: "Version tag or branch. Only for `github` source.",
-				Optional:            true,
-				PlanModifiers: []planmodifier.String{
-					stringplanmodifier.RequiresReplace(),
-				},
+				MarkdownDescription: "Installed plugin version.",
+				Computed:            true,
 			},
-			"package": schema.StringAttribute{
-				MarkdownDescription: "Package path within the repo. Only for `github` source.",
-				Optional:            true,
-				PlanModifiers: []planmodifier.String{
-					stringplanmodifier.RequiresReplace(),
-				},
+			"category": schema.StringAttribute{
+				MarkdownDescription: "Plugin category (e.g. `model`, `tool`).",
+				Computed:            true,
 			},
 		},
 	}
@@ -109,6 +88,23 @@ func (r *PluginInstallResource) Configure(ctx context.Context, req resource.Conf
 	r.client = client
 }
 
+// findInstalledPlugin locates the installed plugin matching the configured
+// identifier: first by exact identifier, then by plugin_id prefix.
+func findInstalledPlugin(plugins []PluginInfo, identifier string) *PluginInfo {
+	pluginIDPrefix := strings.SplitN(identifier, ":", 2)[0]
+	for i := range plugins {
+		if plugins[i].Identifier == identifier {
+			return &plugins[i]
+		}
+	}
+	for i := range plugins {
+		if plugins[i].PluginID == pluginIDPrefix {
+			return &plugins[i]
+		}
+	}
+	return nil
+}
+
 func (r *PluginInstallResource) Create(ctx context.Context, req resource.CreateRequest, resp *resource.CreateResponse) {
 	var data PluginInstallResourceModel
 
@@ -117,76 +113,28 @@ func (r *PluginInstallResource) Create(ctx context.Context, req resource.CreateR
 		return
 	}
 
-	source := data.Source.ValueString()
-	if source == "" {
-		source = "marketplace"
-		data.Source = types.StringValue("marketplace")
-	}
-
-	switch source {
-	case "github":
-		githubReq := PluginInstallGithubRequest{
-			PluginUniqueIdentifier: data.PluginUniqueIdentifier.ValueString(),
-			Repo:                   data.Repo.ValueString(),
-			Version:                data.Version.ValueString(),
-			Package:                data.Package.ValueString(),
-		}
-		err := r.client.InstallPluginFromGithub(ctx, githubReq)
-		if err != nil {
-			resp.Diagnostics.AddError("Client Error", fmt.Sprintf("Unable to install plugin from GitHub: %s", err))
-			return
-		}
-	case "marketplace":
-		marketplaceReq := PluginInstallMarketplaceRequest{
-			PluginUniqueIdentifiers: []string{data.PluginUniqueIdentifier.ValueString()},
-		}
-		err := r.client.InstallPluginsFromMarketplace(ctx, marketplaceReq)
-		if err != nil {
-			resp.Diagnostics.AddError("Client Error", fmt.Sprintf("Unable to install plugin from marketplace: %s", err))
-			return
-		}
-	default:
-		resp.Diagnostics.AddError("Invalid Source", fmt.Sprintf("source must be 'marketplace' or 'github', got: %s", source))
-		return
-	}
-
-	// Poll until the plugin appears in the installed list (install is async)
 	identifier := data.PluginUniqueIdentifier.ValueString()
-	var installationID string
-	found := false
 
-	for range 180 {
-		select {
-		case <-ctx.Done():
-			resp.Diagnostics.AddError("Context Cancelled", "Plugin install polling cancelled")
-			return
-		case <-time.After(2 * time.Second):
-		}
-
-		plugins, err := r.client.ListPlugins(ctx)
-		if err != nil {
-			continue // retry on transient errors
-		}
-
-		for _, p := range plugins.Plugins {
-			if p.PluginUniqueIdentifier == identifier {
-				installationID = p.PluginInstallationID
-				found = true
-				break
-			}
-		}
-
-		if found {
-			break
-		}
-	}
-
-	if !found {
-		resp.Diagnostics.AddError("Plugin Not Ready", fmt.Sprintf("Plugin '%s' not found in installed list after 360s of polling", identifier))
+	if err := r.client.InstallPlugin(ctx, identifier); err != nil {
+		resp.Diagnostics.AddError("Client Error", fmt.Sprintf("Unable to install plugin: %s", err))
 		return
 	}
 
-	data.PluginInstallationID = types.StringValue(installationID)
+	plugins, err := r.client.ListPlugins(ctx)
+	if err != nil {
+		resp.Diagnostics.AddError("Client Error", fmt.Sprintf("Unable to list plugins: %s", err))
+		return
+	}
+
+	installed := findInstalledPlugin(plugins, identifier)
+	if installed == nil {
+		resp.Diagnostics.AddError("Plugin Not Found", fmt.Sprintf("Plugin '%s' is not in the installed plugins list after install", identifier))
+		return
+	}
+
+	data.PluginID = types.StringValue(installed.PluginID)
+	data.Version = types.StringValue(installed.Version)
+	data.Category = types.StringValue(installed.Category)
 
 	resp.Diagnostics.Append(resp.State.Set(ctx, &data)...)
 }
@@ -205,27 +153,35 @@ func (r *PluginInstallResource) Read(ctx context.Context, req resource.ReadReque
 		return
 	}
 
-	found := false
-	identifier := data.PluginUniqueIdentifier.ValueString()
-	for _, p := range plugins.Plugins {
-		if p.PluginUniqueIdentifier == identifier {
-			data.PluginInstallationID = types.StringValue(p.PluginInstallationID)
-			found = true
+	pluginID := data.PluginID.ValueString()
+	var installed *PluginInfo
+	for i := range plugins {
+		if plugins[i].PluginID == pluginID {
+			installed = &plugins[i]
 			break
 		}
 	}
 
-	if !found {
+	if installed == nil {
 		// Plugin no longer installed — remove from state
 		resp.State.RemoveResource(ctx)
 		return
 	}
 
+	// The identifier records which exact version was installed; if the server
+	// reports a different one the resource was replaced out of band — record it
+	// so the next plan requires replacement.
+	if installed.Identifier != data.PluginUniqueIdentifier.ValueString() {
+		data.PluginUniqueIdentifier = types.StringValue(installed.Identifier)
+	}
+	data.Version = types.StringValue(installed.Version)
+	data.Category = types.StringValue(installed.Category)
+
 	resp.Diagnostics.Append(resp.State.Set(ctx, &data)...)
 }
 
 func (r *PluginInstallResource) Update(ctx context.Context, req resource.UpdateRequest, resp *resource.UpdateResponse) {
-	// Plugin install is replace-only (all fields use RequiresReplace).
+	// Plugin install is replace-only (plugin_unique_identifier uses RequiresReplace).
 	// Update should never be called, but handle it gracefully.
 	var data PluginInstallResourceModel
 	resp.Diagnostics.Append(req.Plan.Get(ctx, &data)...)
@@ -243,12 +199,8 @@ func (r *PluginInstallResource) Delete(ctx context.Context, req resource.DeleteR
 		return
 	}
 
-	uninstallReq := PluginUninstallRequest{
-		PluginInstallationID: data.PluginInstallationID.ValueString(),
-	}
-
-	err := r.client.UninstallPlugin(ctx, uninstallReq)
-	if err != nil {
+	err := r.client.UninstallPlugin(ctx, data.PluginID.ValueString())
+	if err != nil && !isNotFound(err) {
 		resp.Diagnostics.AddError("Client Error", fmt.Sprintf("Unable to uninstall plugin: %s", err))
 		return
 	}

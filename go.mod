@@ -2,7 +2,10 @@ module github.com/dify/dify-tf
 
 go 1.26.2
 
-require github.com/hashicorp/terraform-plugin-framework v1.19.0
+require (
+	github.com/hashicorp/terraform-plugin-framework v1.19.0
+	gopkg.in/yaml.v3 v3.0.1
+)
 
 require (
 	github.com/fatih/color v1.18.0 // indirect
