@@ -350,3 +350,67 @@ func TestInstallPluginTaskFailedSurfacesMessages(t *testing.T) {
 		t.Fatalf("expected plugin failure message, got: %v", err)
 	}
 }
+
+func TestGetAccount(t *testing.T) {
+	var gotMethod, gotPath string
+	client, _, _ := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		gotMethod = r.Method
+		gotPath = r.URL.Path
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("X-Dify-Catalog", "fp-1")
+		_, _ = w.Write([]byte(`{"subject_type":"personal_access_token","default_workspace_id":"ws-default"}`))
+	})
+
+	account, err := client.GetAccount(context.Background())
+	if err != nil {
+		t.Fatalf("GetAccount failed: %v", err)
+	}
+	if gotMethod != http.MethodGet {
+		t.Fatalf("expected GET, got %s", gotMethod)
+	}
+	if gotPath != "/openapi/v1/account" {
+		t.Fatalf("expected /openapi/v1/account, got %q", gotPath)
+	}
+	if account.DefaultWorkspaceID != "ws-default" {
+		t.Fatalf("expected ws-default, got %q", account.DefaultWorkspaceID)
+	}
+}
+
+func TestResolveWorkspaceIDOrder(t *testing.T) {
+	accountHits := 0
+	client, _, _ := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		accountHits++
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("X-Dify-Catalog", "fp-1")
+		_, _ = w.Write([]byte(`{"default_workspace_id":"ws-from-account"}`))
+	})
+
+	// Configured value wins and never calls /account.
+	t.Setenv("DIFY_WORKSPACE_ID", "ws-from-env")
+	got, err := resolveWorkspaceID(context.Background(), client, "ws-from-config")
+	if err != nil || got != "ws-from-config" {
+		t.Fatalf("config: got %q err %v", got, err)
+	}
+	if accountHits != 0 {
+		t.Fatalf("config path must not call /account, got %d calls", accountHits)
+	}
+
+	// Env wins over the account lookup when config is unset.
+	got, err = resolveWorkspaceID(context.Background(), client, "")
+	if err != nil || got != "ws-from-env" {
+		t.Fatalf("env: got %q err %v", got, err)
+	}
+	if accountHits != 0 {
+		t.Fatalf("env path must not call /account, got %d calls", accountHits)
+	}
+
+	// Otherwise the token owner's default workspace is used.
+	t.Setenv("DIFY_WORKSPACE_ID", "")
+	got, err = resolveWorkspaceID(context.Background(), client, "")
+	if err != nil || got != "ws-from-account" {
+		t.Fatalf("account: got %q err %v", got, err)
+	}
+	if accountHits != 1 {
+		t.Fatalf("expected one /account call, got %d", accountHits)
+	}
+}

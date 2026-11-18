@@ -9,6 +9,7 @@ import (
 
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
+	"github.com/hashicorp/terraform-plugin-framework/resource/schema/booldefault"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/planmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringplanmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/types"
@@ -31,6 +32,7 @@ type ModelProviderCredentialResourceModel struct {
 	CredentialID types.String `tfsdk:"credential_id"`
 	Name         types.String `tfsdk:"name"`
 	Credentials  types.Map    `tfsdk:"credentials"`
+	MakeActive   types.Bool   `tfsdk:"make_active"`
 	Active       types.Bool   `tfsdk:"active"`
 }
 
@@ -94,6 +96,13 @@ func (r *ModelProviderCredentialResource) Schema(ctx context.Context, req resour
 				Required:    true,
 				Sensitive:   true,
 			},
+			"make_active": schema.BoolAttribute{
+				MarkdownDescription: "Make this credential the provider's active one after every create/update " +
+					"(POST .../credentials/{credential_id}:activate).",
+				Optional: true,
+				Computed: true,
+				Default:  booldefault.StaticBool(false),
+			},
 			"active": schema.BoolAttribute{
 				MarkdownDescription: "Whether this is the provider's active credential.",
 				Computed:            true,
@@ -134,6 +143,15 @@ func (r *ModelProviderCredentialResource) Create(ctx context.Context, req resour
 	}
 
 	applyCredentialWrite(&data.CredentialID, &data.Name, &data.Active, res)
+
+	if data.MakeActive.ValueBool() && !data.Active.ValueBool() {
+		res, err = r.client.ActivateModelProviderCredential(ctx, data.ProviderName.ValueString(), data.CredentialID.ValueString())
+		if err != nil {
+			resp.Diagnostics.AddError("Client Error", fmt.Sprintf("Unable to activate credential: %s", err))
+			return
+		}
+		applyCredentialWrite(&data.CredentialID, &data.Name, &data.Active, res)
+	}
 
 	resp.Diagnostics.Append(resp.State.Set(ctx, &data)...)
 }

@@ -1,0 +1,47 @@
+{
+  "openapi": "3.0.0",
+  "info": {
+    "title": "Open-Meteo Weather",
+    "description": "Current weather from the free Open-Meteo API",
+    "version": "1.0.0"
+  },
+  "servers": [
+    {
+      "url": "https://api.open-meteo.com"
+    }
+  ],
+  "paths": {
+    "/v1/forecast": {
+      "get": {
+        "operationId": "get_forecast",
+        "summary": "Get the current weather for coordinates",
+        "parameters": [
+          {
+            "name": "latitude",
+            "in": "query",
+            "required": true,
+            "schema": { "type": "number" },
+            "description": "Latitude of the location"
+          },
+          {
+            "name": "longitude",
+            "in": "query",
+            "required": true,
+            "schema": { "type": "number" },
+            "description": "Longitude of the location"
+          },
+          {
+            "name": "current_weather",
+            "in": "query",
+            "required": true,
+            "schema": { "type": "boolean" },
+            "description": "Return the current weather block"
+          }
+        ],
+        "responses": {
+          "200": { "description": "Forecast JSON" }
+        }
+      }
+    }
+  }
+}
