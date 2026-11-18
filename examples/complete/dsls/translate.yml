@@ -1,0 +1,127 @@
+app:
+  description: Translate text into a target language
+  icon: 🌐
+  icon_background: '#E4FBCC'
+  icon_type: emoji
+  mode: workflow
+  name: Translate
+  use_icon_as_answer_icon: false
+dependencies: []
+kind: app
+version: 0.7.0
+workflow:
+  conversation_variables: []
+  environment_variables: []
+  features: {}
+  graph:
+    edges:
+    - data:
+        sourceType: start
+        targetType: llm
+      id: start-llm
+      source: start
+      sourceHandle: source
+      target: llm
+      targetHandle: target
+      type: custom
+    - data:
+        sourceType: llm
+        targetType: end
+      id: llm-end
+      source: llm
+      sourceHandle: source
+      target: end
+      targetHandle: target
+      type: custom
+    nodes:
+    - data:
+        desc: ''
+        selected: false
+        title: START
+        type: start
+        variables:
+        - label: Text
+          max_length: 4000
+          options: []
+          required: true
+          type: paragraph
+          variable: text
+        - label: Target Language
+          max_length: 64
+          options: []
+          required: true
+          type: text-input
+          variable: target_language
+      height: 116
+      id: start
+      position:
+        x: 50
+        y: 282
+      positionAbsolute:
+        x: 50
+        y: 282
+      sourcePosition: right
+      targetPosition: left
+      type: custom
+      width: 242
+    - data:
+        context:
+          enabled: false
+          variable_selector: []
+        desc: ''
+        model:
+          completion_params:
+            temperature: 0.3
+          mode: chat
+          name: gpt-4o-mini
+          provider: langgenius/openai/openai
+        prompt_template:
+        - id: translate-user
+          role: user
+          text: 'Translate the following text into {{#start.target_language#}}.
+            Reply with the translation only.
+
+            {{#start.text#}}'
+        selected: false
+        title: Translate
+        type: llm
+        vision:
+          enabled: false
+      height: 88
+      id: llm
+      position:
+        x: 334
+        y: 282
+      positionAbsolute:
+        x: 334
+        y: 282
+      sourcePosition: right
+      targetPosition: left
+      type: custom
+      width: 242
+    - data:
+        desc: ''
+        outputs:
+        - value_selector:
+          - llm
+          - text
+          variable: translation
+        selected: false
+        title: END
+        type: end
+      height: 88
+      id: end
+      position:
+        x: 618
+        y: 282
+      positionAbsolute:
+        x: 618
+        y: 282
+      sourcePosition: right
+      targetPosition: left
+      type: custom
+      width: 242
+    viewport:
+      x: 0
+      y: 0
+      zoom: 1

@@ -1,0 +1,170 @@
+app:
+  description: Fetch current weather for coordinates and summarize it
+  icon: ⛅
+  icon_background: '#E0F2FE'
+  icon_type: emoji
+  mode: workflow
+  name: Weather Brief
+  use_icon_as_answer_icon: false
+dependencies: []
+kind: app
+version: 0.7.0
+workflow:
+  conversation_variables: []
+  environment_variables: []
+  features: {}
+  graph:
+    edges:
+    - data:
+        sourceType: start
+        targetType: tool
+      id: start-weather
+      source: start
+      sourceHandle: source
+      target: weather
+      targetHandle: target
+      type: custom
+    - data:
+        sourceType: tool
+        targetType: llm
+      id: weather-llm
+      source: weather
+      sourceHandle: source
+      target: llm
+      targetHandle: target
+      type: custom
+    - data:
+        sourceType: llm
+        targetType: end
+      id: llm-end
+      source: llm
+      sourceHandle: source
+      target: end
+      targetHandle: target
+      type: custom
+    nodes:
+    - data:
+        desc: ''
+        selected: false
+        title: START
+        type: start
+        variables:
+        - label: Latitude
+          max_length: 32
+          options: []
+          required: true
+          type: text-input
+          variable: latitude
+        - label: Longitude
+          max_length: 32
+          options: []
+          required: true
+          type: text-input
+          variable: longitude
+      height: 116
+      id: start
+      position:
+        x: 50
+        y: 282
+      positionAbsolute:
+        x: 50
+        y: 282
+      sourcePosition: right
+      targetPosition: left
+      type: custom
+      width: 242
+    - data:
+        desc: ''
+        provider_id: ${jsonencode(lookup(open_meteo_tool, "provider_id", ""))}
+        provider_name: ${jsonencode(lookup(open_meteo_tool, "provider_name", ""))}
+        provider_type: ${jsonencode(lookup(open_meteo_tool, "provider_type", "api"))}
+        plugin_id: ${jsonencode(lookup(open_meteo_tool, "plugin_id", null))}
+        plugin_unique_identifier: ${jsonencode(lookup(open_meteo_tool, "plugin_unique_identifier", null))}
+        selected: false
+        title: Open-Meteo Forecast
+        tool_configurations: {}
+        tool_label: ${jsonencode(lookup(open_meteo_tool, "tool_label", "Get Forecast"))}
+        tool_name: ${jsonencode(lookup(open_meteo_tool, "tool_name", "get_forecast"))}
+        tool_node_version: '2'
+        tool_parameters:
+          latitude:
+            type: mixed
+            value: '{{#start.latitude#}}'
+          longitude:
+            type: mixed
+            value: '{{#start.longitude#}}'
+        type: tool
+      height: 88
+      id: weather
+      position:
+        x: 334
+        y: 282
+      positionAbsolute:
+        x: 334
+        y: 282
+      sourcePosition: right
+      targetPosition: left
+      type: custom
+      width: 242
+    - data:
+        context:
+          enabled: false
+          variable_selector: []
+        desc: ''
+        model:
+          completion_params:
+            temperature: 0.7
+          mode: chat
+          name: gpt-4o-mini
+          provider: langgenius/openai/openai
+        prompt_template:
+        - id: weather-system
+          role: system
+          text: You are a weather presenter. Turn the forecast JSON into a short,
+            friendly weather brief.
+        - id: weather-user
+          role: user
+          text: '{{#weather.text#}}'
+        selected: false
+        title: Summarize
+        type: llm
+        vision:
+          enabled: false
+      height: 88
+      id: llm
+      position:
+        x: 618
+        y: 282
+      positionAbsolute:
+        x: 618
+        y: 282
+      sourcePosition: right
+      targetPosition: left
+      type: custom
+      width: 242
+    - data:
+        desc: ''
+        outputs:
+        - value_selector:
+          - llm
+          - text
+          variable: brief
+        selected: false
+        title: END
+        type: end
+      height: 88
+      id: end
+      position:
+        x: 902
+        y: 282
+      positionAbsolute:
+        x: 902
+        y: 282
+      sourcePosition: right
+      targetPosition: left
+      type: custom
+      width: 242
+    viewport:
+      x: 0
+      y: 0
+      zoom: 1

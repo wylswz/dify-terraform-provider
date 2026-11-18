@@ -1,0 +1,121 @@
+app:
+  description: An agent that researches, translates, and reports the weather
+  icon: 🧭
+  icon_background: '#FFEAD5'
+  icon_type: emoji
+  mode: agent-chat
+  name: Research Assistant
+  use_icon_as_answer_icon: false
+dependencies:
+- current_identifier: null
+  type: marketplace
+  value:
+    marketplace_plugin_unique_identifier: langgenius/openai:0.3.8@592c8252795b5f75807de2d609a03196ed02596b409f7642b4a07548c7ff57ef
+    version: null
+- current_identifier: null
+  type: marketplace
+  value:
+    marketplace_plugin_unique_identifier: langgenius/tavily:0.1.7@5fce9cf01fecda9ad92e5125397d2bb5497429baed276c7f14f033e7debd0abe
+    version: null
+kind: app
+version: 0.7.0
+model_config:
+  agent_mode:
+    enabled: true
+    max_iteration: 10
+    prompt: null
+    strategy: function_call
+    tools:
+%{ for tool in workflow_tools ~}
+    - enabled: true
+      provider_id: ${jsonencode(lookup(tool, "provider_id", ""))}
+      provider_name: ${jsonencode(lookup(tool, "provider_name", ""))}
+      provider_type: ${jsonencode(lookup(tool, "provider_type", "workflow"))}
+      tool_description: ${jsonencode(lookup(tool, "tool_description", ""))}
+      tool_label: ${jsonencode(lookup(tool, "tool_label", ""))}
+      tool_name: ${jsonencode(lookup(tool, "tool_name", ""))}
+      tool_configuration: {}
+      tool_parameters: {}
+      settings: {}
+      parameters: {}
+      extra: {}
+%{ endfor ~}
+    - enabled: true
+      provider_id: "langgenius/tavily/tavily"
+      provider_name: "langgenius/tavily/tavily"
+      provider_type: builtin
+      plugin_unique_identifier: "langgenius/tavily:0.1.7@5fce9cf01fecda9ad92e5125397d2bb5497429baed276c7f14f033e7debd0abe"
+      tool_description: "A search engine built for AI agents"
+      tool_label: "Tavily Search"
+      tool_name: "tavily_search"
+      tool_configuration:
+        max_results: 5
+      tool_parameters: {}
+      settings: {}
+      parameters: {}
+      extra: {}
+    - enabled: true
+      provider_id: ${jsonencode(lookup(api_tool, "provider_id", ""))}
+      provider_name: ${jsonencode(lookup(api_tool, "provider_name", ""))}
+      provider_type: ${jsonencode(lookup(api_tool, "provider_type", "api"))}
+      tool_description: ${jsonencode(lookup(api_tool, "tool_description", ""))}
+      tool_label: ${jsonencode(lookup(api_tool, "tool_label", ""))}
+      tool_name: ${jsonencode(lookup(api_tool, "tool_name", ""))}
+      tool_configuration: {}
+      tool_parameters: {}
+      settings: {}
+      parameters: {}
+      extra: {}
+%{ for tool in mcp_tools ~}
+    - enabled: true
+      provider_id: ${jsonencode(lookup(tool, "provider_id", ""))}
+      provider_name: ${jsonencode(lookup(tool, "provider_name", ""))}
+      provider_type: ${jsonencode(lookup(tool, "provider_type", "mcp"))}
+      tool_description: ${jsonencode(lookup(tool, "tool_description", ""))}
+      tool_label: ${jsonencode(lookup(tool, "tool_label", ""))}
+      tool_name: ${jsonencode(lookup(tool, "tool_name", ""))}
+      tool_configuration: {}
+      tool_parameters: {}
+      settings: {}
+      parameters: {}
+      extra: {}
+%{ endfor ~}
+  annotation_reply: null
+  chat_prompt_config: {}
+  completion_prompt_config: {}
+  dataset_configs:
+    datasets:
+      datasets: []
+    reranking_enable: false
+    retrieval_model: multiple
+    top_k: 4
+  dataset_query_variable: null
+  external_data_tools: []
+  file_upload:
+    enabled: false
+  model:
+    completion_params:
+      temperature: 0.7
+    mode: chat
+    name: gpt-4o-mini
+    provider: langgenius/openai/openai
+  more_like_this:
+    enabled: false
+  opening_statement: ''
+  pre_prompt: 'You are a careful research assistant. Use your tools to answer
+    thoroughly; say when a tool could not help.'
+  prompt_type: simple
+  retriever_resource:
+    enabled: true
+  sensitive_word_avoidance:
+    enabled: false
+  speech_to_text:
+    enabled: false
+  suggested_questions: []
+  suggested_questions_after_answer:
+    enabled: false
+  text_to_speech:
+    enabled: false
+    language: ''
+    voice: ''
+  user_input_form: []

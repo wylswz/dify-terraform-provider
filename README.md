@@ -34,13 +34,15 @@ provider "dify" {
 }
 ```
 
+A full end-to-end setup — model credentials with load balancing, tool providers, published workflow tools, and an agent orchestrator — lives in [`examples/complete/`](examples/complete/).
+
 ## Provider Configuration
 
 | Attribute | Environment Variable | Description | Required |
 |---|---|---|---|
 | `host` | `DIFY_HOST` | Dify base URL; the provider calls `<host>/openapi/v1` | No (defaults to `http://localhost`) |
 | `token` | `DIFY_TOKEN` | Personal Access Token (`Authorization: Bearer`) | Yes |
-| `workspace_id` | `DIFY_WORKSPACE_ID` | Workspace ID for resource operations | Yes |
+| `workspace_id` | `DIFY_WORKSPACE_ID` | Workspace ID for resource operations; defaults to the token owner's default workspace (`GET /openapi/v1/account`) | No |
 
 The server rate-limits each token on `/openapi/v1` (`OPENAPI_RATE_LIMIT_PER_TOKEN`, default 60 requests/minute). The provider automatically backs off and retries on HTTP 429 using the response's `Retry-After` header.
 
@@ -69,6 +71,8 @@ resource "dify_app" "my_workflow" {
 | `mode` | String (computed) | App mode (`chat`, `workflow`, `agent-chat`, etc.), read from the exported DSL |
 | `exported_dsl_yaml` | String (computed) | DSL YAML exported from the live app |
 | `draft_hash` | String (computed) | Draft hash returned by the export; sent back on overwrite imports |
+| `publish` | Bool (optional, default `false`) | Publish the app after create/update (`POST /apps/{id}:publish`). Only `workflow`/`advanced-chat` apps have drafts — other modes are live on import and `publish` is ignored |
+| `service_api_enabled` | Bool (optional, computed) | Enable the app's service API endpoint; read back from the server. **Warning:** this server's management calls (DSL export, publish, versions) require the Service API — with `false`, Read/Update of the resource fail |
 
 **Replace-on-update caveat**: the OpenAPI only overwrites `workflow` and `advanced-chat` apps in place. For apps of any other mode (`chat`, `agent-chat`, `completion`, `agent`), changing `dsl_yaml`, `name`, or `description` **replaces** the app (delete + create) — plan accordingly, since replacement generates a new app ID.
 
@@ -93,8 +97,173 @@ resource "dify_model_provider_credential" "openai" {
 | `provider_name` | String (required) | Model provider id (forces replacement if changed) |
 | `credentials` | Map (required, sensitive) | Credential key-value pairs; write-only — the API never returns secret values, so state keeps the configured values |
 | `name` | String (optional) | Human-readable name |
+| `make_active` | Bool (optional) | Switch the provider's active credential to this one after create/update |
 | `credential_id` | String (computed) | Credential ID |
 | `active` | Bool (computed) | Whether this is the provider's active credential |
+
+### `dify_model_credential`
+
+Manages a credential for an individual model (custom-model credentials), e.g. a per-model API key. Identified by `provider_name` + `model` + `model_type`.
+
+```hcl
+resource "dify_model_credential" "gpt4o_mini" {
+  provider_name = "langgenius/openai/openai"
+  model         = "gpt-4o-mini"
+  model_type    = "llm"
+  name          = "per-model-key"
+  credentials = {
+    api_key = "sk-..."
+  }
+}
+```
+
+| Attribute | Type | Description |
+|---|---|---|
+| `provider_name` | String (required) | Model provider id (forces replacement) |
+| `model` | String (required) | Model name (forces replacement) |
+| `model_type` | String (required) | `llm`, `text-embedding`, `rerank`, `speech2text`, `tts` (forces replacement) |
+| `credentials` | Map (required, sensitive) | Credential key-value pairs; write-only |
+| `name` | String (optional) | Human-readable name |
+| `make_active` | Bool (optional) | Make this the model's active credential after create/update |
+| `credential_id` | String (computed) | Credential ID |
+| `active` | Bool (computed) | Whether this is the model's active credential |
+
+### `dify_default_model`
+
+Sets the workspace default model for a model type (e.g. the default LLM).
+
+```hcl
+resource "dify_default_model" "llm" {
+  model_type    = "llm"
+  provider_name = "langgenius/openai/openai"
+  model         = "gpt-4o-mini"
+}
+```
+
+| Attribute | Type | Description |
+|---|---|---|
+| `model_type` | String (required) | Model type (forces replacement) |
+| `provider_name` | String (required) | Provider of the default model |
+| `model` | String (required) | Model name |
+
+**Delete caveat**: the API has no "unset default" operation, so `terraform destroy` only removes the resource from state — the server-side default is left unchanged.
+
+### `dify_model_settings`
+
+Manages a model's enabled state and load-balancing pool declaratively.
+
+```hcl
+resource "dify_model_settings" "gpt4o_mini" {
+  provider_name          = "langgenius/openai/openai"
+  model                  = "gpt-4o-mini"
+  model_type             = "llm"
+  config_from            = "predefined-model"
+  load_balancing_enabled = true
+
+  load_balancing_entries = [
+    { enabled = true },                                                   # inherit the model's active credential
+    { credential_id = dify_model_credential.backup.credential_id, enabled = true },
+  ]
+}
+```
+
+| Attribute | Type | Description |
+|---|---|---|
+| `provider_name` | String (required) | Model provider id (forces replacement) |
+| `model` | String (required) | Model name (forces replacement) |
+| `model_type` | String (required) | Model type (forces replacement) |
+| `config_from` | String (required) | `predefined-model` or `custom-model` — which credential table the entries reference (forces replacement) |
+| `enabled` | Bool (optional, default `true`) | Whether the model is enabled |
+| `load_balancing_enabled` | Bool (optional, default `false`) | Enable load balancing across entries |
+| `load_balancing_entries` | List (optional) | `{ credential_id, enabled }` — `credential_id` null/absent means the inherit entry |
+
+Delete resets the model to `enabled = true`, load balancing disabled, no entries.
+
+### `dify_api_tool_provider`
+
+Manages a custom OpenAPI-schema tool provider.
+
+```hcl
+resource "dify_api_tool_provider" "open_meteo" {
+  name        = "open_meteo"
+  icon        = { content = "⛅", background = "#E0F2FE" }
+  schema_type = "openapi"
+  schema      = file("openapi.json")
+  credentials = { auth_type = "none" }
+}
+```
+
+| Attribute | Type | Description |
+|---|---|---|
+| `name` | String (required) | Provider name — renaming applies in place via PUT |
+| `icon` | Object (required) | `{ content, background }` |
+| `schema_type` | String (optional, default `openapi`) | Schema format |
+| `schema` | String (required) | OpenAPI schema document |
+| `credentials` | Map (optional, sensitive) | Auth config, e.g. `{ auth_type = "none" }`; write-only — describe returns masked values |
+| `privacy_policy` | String (optional) | Privacy policy URL |
+| `custom_disclaimer` | String (optional) | Disclaimer text |
+| `labels` | List (optional) | Labels |
+| `tools` | List (computed) | Tool names the schema produced |
+
+Import by name: `terraform import dify_api_tool_provider.x <name>`.
+
+### `dify_mcp_provider`
+
+Manages an MCP (Model Context Protocol) tool provider.
+
+```hcl
+resource "dify_mcp_provider" "deepwiki" {
+  name              = "deepwiki"
+  server_url        = "https://mcp.deepwiki.com/mcp"
+  server_identifier = "deepwiki"
+  icon              = "🌐"
+  icon_type         = "emoji"
+}
+```
+
+| Attribute | Type | Description |
+|---|---|---|
+| `name` | String (required) | Provider name |
+| `server_url` | String (required, sensitive) | MCP endpoint; write-only — describe masks it |
+| `server_identifier` | String (optional) | Server identifier slug |
+| `icon`, `icon_type`, `icon_background` | String (optional) | Icon (`icon_type` defaults to `emoji`) |
+| `headers` | Map (optional, sensitive) | Extra request headers; write-only |
+| `timeout`, `sse_read_timeout` | Number (optional) | Connection timeouts via `configuration` |
+| `id` | String (computed) | Provider ID |
+| `tools` | List (computed) | Tool names fetched from the server |
+
+After create/update, if the server reported no tools the provider calls `:refresh` once and records them. Import by ID: `terraform import dify_mcp_provider.x <id>`.
+
+### `dify_workflow_tool`
+
+Publishes a workflow app as a workspace tool. The workflow app must be published first (`dify_app` with `publish = true`).
+
+```hcl
+resource "dify_workflow_tool" "web_research" {
+  workflow_app_id = dify_app.research.id
+  name            = "web_research"
+  label           = "Web Research"
+  description     = "Research a question on the web"
+  icon            = { content = "🔎", background = "#FFEAD5" }
+  parameters = [
+    { name = "query", description = "The question to research", form = "llm" },
+  ]
+}
+```
+
+| Attribute | Type | Description |
+|---|---|---|
+| `workflow_app_id` | String (required) | App to publish as a tool (forces replacement) |
+| `name` | String (required) | Tool name (agent-visible identifier) |
+| `label` | String (required) | Display label |
+| `description` | String (required) | Tool description |
+| `icon` | Object (required) | `{ content, background }` |
+| `parameters` | List (required) | `{ name, description, form }` — `form` defaults to `llm` |
+| `privacy_policy` | String (optional) | Privacy policy URL |
+| `labels` | List (optional) | Labels |
+| `id` | String (computed) | Workflow tool ID |
+
+Delete unpublishes the tool. Import by tool ID: `terraform import dify_workflow_tool.x <id>`.
 
 ### `dify_tool_provider_credential`
 
@@ -196,6 +365,27 @@ data "dify_models" "openai_llms" {
 ```
 
 Each entry exposes `provider`, `model`, `model_type`, and `status`.
+
+### `dify_tools`
+
+Lists tools a workflow can call in the workspace, each with the server-provided tool-node template. Use `node_data` (JSON) to inject the exact `provider_id`/`provider_name`/`plugin_unique_identifier` a tool node's DSL expects.
+
+```hcl
+data "dify_tools" "deepwiki" {
+  provider_name = dify_mcp_provider.deepwiki.id
+}
+
+data "dify_tools" "search" {
+  query = "search"
+}
+```
+
+| Argument | Description |
+|---|---|
+| `provider_name` | Optional provider filter (the provider's `id`, e.g. `langgenius/tavily/tavily` or an MCP provider ID) |
+| `query` | Optional words matched against tool name, label, provider id, or provider label |
+
+Each `tools` entry exposes `provider`, `provider_type`, `name`, `label`, and `node_data` (JSON string).
 
 ## Datasets
 

@@ -270,6 +270,15 @@ func isNotFound(err error) bool {
 	return errors.As(err, &apiErr) && apiErr.StatusCode == http.StatusNotFound
 }
 
+// isServiceAPIDisabled reports whether err is the server's 403
+// `service_api_disabled` error — the app's Service API is off, which gates
+// app management calls (DSL export, publish, versions).
+func isServiceAPIDisabled(err error) bool {
+	var apiErr *APIError
+	return errors.As(err, &apiErr) && apiErr.StatusCode == http.StatusForbidden &&
+		apiErr.Code == "service_api_disabled"
+}
+
 // apiErrorFromBody builds an APIError from a non-2xx response body,
 // decoding the ErrorBody shape when present.
 func apiErrorFromBody(statusCode int, data []byte) *APIError {
@@ -492,6 +501,22 @@ type appListResponse struct {
 	Data    []AppListItem `json:"data"`
 }
 
+// AccountResponse mirrors GET /openapi/v1/account — the fields the provider
+// needs for workspace resolution.
+type AccountResponse struct {
+	DefaultWorkspaceID string `json:"default_workspace_id"`
+}
+
+// GetAccount returns the token owner's account info. The endpoint is
+// unscoped (no workspace) and is reachable with a PAT.
+func (c *DifyClient) GetAccount(ctx context.Context) (*AccountResponse, error) {
+	var result AccountResponse
+	if err := c.doJSON(ctx, http.MethodGet, c.BaseURL+"/account", nil, &result); err != nil {
+		return nil, err
+	}
+	return &result, nil
+}
+
 // ListApps returns the first page (limit 100) of apps whose name contains the
 // given substring; an app id passed as name returns that one app.
 func (c *DifyClient) ListApps(ctx context.Context, name string) ([]AppListItem, error) {
@@ -575,10 +600,18 @@ type credentialWriteRequest struct {
 	Name        string         `json:"name,omitempty"`
 }
 
+// CustomModelRef is one custom model of a provider, with its active credential.
+type CustomModelRef struct {
+	Model            string         `json:"model"`
+	ModelType        string         `json:"model_type"`
+	ActiveCredential *CredentialRef `json:"active_credential"`
+}
+
 type providerDescribeResponse struct {
-	Credentials       []CredentialRef `json:"credentials"`
-	ActiveCredential  *CredentialRef  `json:"active_credential"`
-	DefaultCredential *CredentialRef  `json:"default_credential"`
+	Credentials       []CredentialRef  `json:"credentials"`
+	ActiveCredential  *CredentialRef   `json:"active_credential"`
+	DefaultCredential *CredentialRef   `json:"default_credential"`
+	CustomModels      []CustomModelRef `json:"custom_models"`
 }
 
 // credentialIDList returns the ids of a provider's saved credentials.
@@ -846,4 +879,246 @@ func (c *DifyClient) ListModels(ctx context.Context, provider, modelType string)
 			return all, nil
 		}
 	}
+}
+
+// ---------------------------------------------------------------------------
+// App publish and Service API
+// ---------------------------------------------------------------------------
+
+// PublishResult is the response of POST /apps/{app_id}:publish.
+type PublishResult struct {
+	VersionID string  `json:"version_id"`
+	CreatedAt int64   `json:"created_at"`
+	Warning   *string `json:"warning"`
+}
+
+// PublishApp publishes the app's current draft as a new version and makes the
+// app use it. markedName/markedComment optionally name the version.
+func (c *DifyClient) PublishApp(ctx context.Context, appID, markedName, markedComment string) (*PublishResult, error) {
+	url := fmt.Sprintf("%s/apps/%s:publish", c.BaseURL, url.PathEscape(appID))
+	var result PublishResult
+	if err := c.doJSON(ctx, http.MethodPost, url, map[string]any{
+		"marked_name":    markedName,
+		"marked_comment": markedComment,
+	}, &result); err != nil {
+		return nil, err
+	}
+	return &result, nil
+}
+
+// ServiceAPI is the response of the service-api describe/set endpoints
+// (GET/PATCH /apps/{app_id}/service-api or /service-api/agent).
+type ServiceAPI struct {
+	Enabled bool   `json:"enabled"`
+	BaseURL string `json:"base_url"`
+}
+
+// serviceAPIURL returns the app's service-api route; agent apps use the
+// dedicated /service-api/agent variant.
+func (c *DifyClient) serviceAPIURL(appID string, agent bool) string {
+	suffix := "/service-api"
+	if agent {
+		suffix += "/agent"
+	}
+	return fmt.Sprintf("%s/apps/%s%s", c.BaseURL, url.PathEscape(appID), suffix)
+}
+
+// GetServiceAPI reads whether the app's Service API is enabled.
+func (c *DifyClient) GetServiceAPI(ctx context.Context, appID string, agent bool) (*ServiceAPI, error) {
+	var result ServiceAPI
+	if err := c.doJSON(ctx, http.MethodGet, c.serviceAPIURL(appID, agent), nil, &result); err != nil {
+		return nil, err
+	}
+	return &result, nil
+}
+
+// SetServiceAPI turns the app's Service API on or off.
+func (c *DifyClient) SetServiceAPI(ctx context.Context, appID string, agent, enabled bool) (*ServiceAPI, error) {
+	var result ServiceAPI
+	if err := c.doJSON(ctx, http.MethodPatch, c.serviceAPIURL(appID, agent), map[string]any{
+		"enabled": enabled,
+	}, &result); err != nil {
+		return nil, err
+	}
+	return &result, nil
+}
+
+// ActivateModelProviderCredential makes a saved model provider credential the
+// active one (POST {provider}/credentials/{credential_id}:activate).
+func (c *DifyClient) ActivateModelProviderCredential(ctx context.Context, provider, credentialID string) (*CredentialWriteResult, error) {
+	url := c.workspaceURL("/model-providers/" + provider + "/credentials/" + url.PathEscape(credentialID) + ":activate")
+	var result CredentialWriteResult
+	if err := c.doJSON(ctx, http.MethodPost, url, nil, &result); err != nil {
+		return nil, err
+	}
+	return &result, nil
+}
+
+// ---------------------------------------------------------------------------
+// Custom-model credentials (model-providers/{provider}/models/credentials)
+// ---------------------------------------------------------------------------
+
+type modelCredentialRequest struct {
+	Model       string         `json:"model"`
+	ModelType   string         `json:"model_type"`
+	Credentials map[string]any `json:"credentials"`
+	Name        string         `json:"name,omitempty"`
+}
+
+// CreateModelScopedCredential saves a credential for one model of a provider
+// (201). The first credential of a model not yet set up becomes its active one.
+func (c *DifyClient) CreateModelScopedCredential(ctx context.Context, provider, model, modelType string, credentials map[string]any, name string) (*CredentialWriteResult, error) {
+	url := c.workspaceURL("/model-providers/" + provider + "/models/credentials")
+	var result CredentialWriteResult
+	if err := c.doJSON(ctx, http.MethodPost, url, modelCredentialRequest{
+		Model:       model,
+		ModelType:   modelType,
+		Credentials: credentials,
+		Name:        name,
+	}, &result); err != nil {
+		return nil, err
+	}
+	return &result, nil
+}
+
+// UpdateModelScopedCredential replaces a saved credential of one model (200).
+func (c *DifyClient) UpdateModelScopedCredential(ctx context.Context, provider, model, modelType, credentialID string, credentials map[string]any, name string) (*CredentialWriteResult, error) {
+	url := c.workspaceURL("/model-providers/" + provider + "/models/credentials/" + url.PathEscape(credentialID))
+	var result CredentialWriteResult
+	if err := c.doJSON(ctx, http.MethodPatch, url, modelCredentialRequest{
+		Model:       model,
+		ModelType:   modelType,
+		Credentials: credentials,
+		Name:        name,
+	}, &result); err != nil {
+		return nil, err
+	}
+	return &result, nil
+}
+
+// DeleteModelScopedCredential deletes a saved credential of one model;
+// model and model_type travel as required query parameters.
+func (c *DifyClient) DeleteModelScopedCredential(ctx context.Context, provider, model, modelType, credentialID string) error {
+	query := url.Values{}
+	query.Set("model", model)
+	query.Set("model_type", modelType)
+	url := c.workspaceURL("/model-providers/"+provider+"/models/credentials/"+url.PathEscape(credentialID)) + "?" + query.Encode()
+	return c.doJSON(ctx, http.MethodDelete, url, nil, nil)
+}
+
+// ActivateModelScopedCredential makes a saved credential the active one for
+// one model (POST {provider}/models/credentials/{credential_id}:activate).
+func (c *DifyClient) ActivateModelScopedCredential(ctx context.Context, provider, model, modelType, credentialID string) (*CredentialWriteResult, error) {
+	url := c.workspaceURL("/model-providers/" + provider + "/models/credentials/" + url.PathEscape(credentialID) + ":activate")
+	var result CredentialWriteResult
+	if err := c.doJSON(ctx, http.MethodPost, url, map[string]any{
+		"model":      model,
+		"model_type": modelType,
+	}, &result); err != nil {
+		return nil, err
+	}
+	return &result, nil
+}
+
+// ---------------------------------------------------------------------------
+// Default models (workspaces/{ws}/default-models/{model_type})
+// ---------------------------------------------------------------------------
+
+// DefaultModel is the response of the default-model describe/set endpoints.
+type DefaultModel struct {
+	ModelType string  `json:"model_type"`
+	Provider  *string `json:"provider"`
+	Model     *string `json:"model"`
+}
+
+// GetDefaultModel reads the workspace's default model of one model type;
+// Provider and Model are nil while no default is set.
+func (c *DifyClient) GetDefaultModel(ctx context.Context, modelType string) (*DefaultModel, error) {
+	url := c.workspaceURL("/default-models/" + url.PathEscape(modelType))
+	var result DefaultModel
+	if err := c.doJSON(ctx, http.MethodGet, url, nil, &result); err != nil {
+		return nil, err
+	}
+	return &result, nil
+}
+
+// SetDefaultModel sets the workspace's default model of one model type.
+func (c *DifyClient) SetDefaultModel(ctx context.Context, modelType, provider, model string) (*DefaultModel, error) {
+	url := c.workspaceURL("/default-models/" + url.PathEscape(modelType))
+	var result DefaultModel
+	if err := c.doJSON(ctx, http.MethodPut, url, map[string]any{
+		"provider": provider,
+		"model":    model,
+	}, &result); err != nil {
+		return nil, err
+	}
+	return &result, nil
+}
+
+// ---------------------------------------------------------------------------
+// Model settings (model-providers/{provider}/models/settings)
+// ---------------------------------------------------------------------------
+
+// LoadBalancingEntry is one stored load-balancing entry of a model.
+type LoadBalancingEntry struct {
+	ID           string  `json:"id"`
+	Name         string  `json:"name"`
+	CredentialID *string `json:"credential_id"`
+	Enabled      bool    `json:"enabled"`
+	Inherit      bool    `json:"inherit"`
+}
+
+// ModelSettings is the response of the model-settings describe/set endpoints.
+type ModelSettings struct {
+	Model         string `json:"model"`
+	ModelType     string `json:"model_type"`
+	ConfigFrom    string `json:"config_from"`
+	Enabled       bool   `json:"enabled"`
+	LoadBalancing struct {
+		Enabled bool                 `json:"enabled"`
+		Entries []LoadBalancingEntry `json:"entries"`
+	} `json:"load_balancing"`
+}
+
+// LoadBalancingEntryRequest is one desired load-balancing entry; a nil
+// CredentialID names the entry that reuses the active credential.
+type LoadBalancingEntryRequest struct {
+	CredentialID *string `json:"credential_id"`
+	Enabled      bool    `json:"enabled"`
+}
+
+// GetModelSettings reads a model's enablement and load-balancing settings.
+// configFrom selects which credential table the entries reference
+// ("predefined-model" or "custom-model").
+func (c *DifyClient) GetModelSettings(ctx context.Context, provider, model, modelType, configFrom string) (*ModelSettings, error) {
+	query := url.Values{}
+	query.Set("model", model)
+	query.Set("model_type", modelType)
+	query.Set("config_from", configFrom)
+	url := c.workspaceURL("/model-providers/"+provider+"/models/settings") + "?" + query.Encode()
+	var result ModelSettings
+	if err := c.doJSON(ctx, http.MethodGet, url, nil, &result); err != nil {
+		return nil, err
+	}
+	return &result, nil
+}
+
+// SetModelSettings replaces a model's enablement and load-balancing settings;
+// entries are declarative — stored entries not listed are deleted.
+func (c *DifyClient) SetModelSettings(ctx context.Context, provider, model, modelType, configFrom string, enabled, lbEnabled bool, entries []LoadBalancingEntryRequest) (*ModelSettings, error) {
+	url := c.workspaceURL("/model-providers/" + provider + "/models/settings")
+	var result ModelSettings
+	if err := c.doJSON(ctx, http.MethodPut, url, map[string]any{
+		"model":       model,
+		"model_type":  modelType,
+		"config_from": configFrom,
+		"enabled":     enabled,
+		"load_balancing": map[string]any{
+			"enabled": lbEnabled,
+			"entries": entries,
+		},
+	}, &result); err != nil {
+		return nil, err
+	}
+	return &result, nil
 }

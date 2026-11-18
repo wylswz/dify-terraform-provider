@@ -12,6 +12,7 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
+	"github.com/hashicorp/terraform-plugin-framework/resource/schema/booldefault"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/planmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringplanmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/types"
@@ -21,6 +22,7 @@ import (
 // Ensure provider defined types fully satisfy framework interfaces.
 var _ resource.Resource = &AppResource{}
 var _ resource.ResourceWithImportState = &AppResource{}
+var _ resource.ResourceWithModifyPlan = &AppResource{}
 
 func NewAppResource() resource.Resource {
 	return &AppResource{}
@@ -33,13 +35,15 @@ type AppResource struct {
 
 // AppResourceModel describes the resource data model.
 type AppResourceModel struct {
-	ID              types.String `tfsdk:"id"`
-	Name            types.String `tfsdk:"name"`
-	Mode            types.String `tfsdk:"mode"`
-	Description     types.String `tfsdk:"description"`
-	DSLYaml         types.String `tfsdk:"dsl_yaml"`
-	ExportedDSLYaml types.String `tfsdk:"exported_dsl_yaml"`
-	DraftHash       types.String `tfsdk:"draft_hash"`
+	ID                types.String `tfsdk:"id"`
+	Name              types.String `tfsdk:"name"`
+	Mode              types.String `tfsdk:"mode"`
+	Description       types.String `tfsdk:"description"`
+	DSLYaml           types.String `tfsdk:"dsl_yaml"`
+	ExportedDSLYaml   types.String `tfsdk:"exported_dsl_yaml"`
+	DraftHash         types.String `tfsdk:"draft_hash"`
+	Publish           types.Bool   `tfsdk:"publish"`
+	ServiceAPIEnabled types.Bool   `tfsdk:"service_api_enabled"`
 }
 
 // dslAppMeta is the top-level `app:` map of an exported DSL document.
@@ -69,6 +73,10 @@ var appModesSupportingOverwrite = map[string]bool{
 	"workflow":      true,
 	"advanced-chat": true,
 }
+
+// appModesWithDrafts are the modes the publish op serves (the server's
+// GRAPH_MODES). Other modes have no draft and go live on import.
+var appModesWithDrafts = appModesSupportingOverwrite
 
 // requireReplaceForNonWorkflowApps forces replacement when the prior state's app
 // mode cannot be overwritten via DSL import. The server only overwrites
@@ -155,6 +163,25 @@ func (r *AppResource) Schema(ctx context.Context, req resource.SchemaRequest, re
 			"draft_hash": schema.StringAttribute{
 				MarkdownDescription: "Hash of the app's current draft, returned by the DSL export. " +
 					"Passed back on overwrite imports so concurrent draft edits are refused.",
+				Computed: true,
+			},
+			"publish": schema.BoolAttribute{
+				MarkdownDescription: "Publish the imported draft as a new version and make the app use it " +
+					"(POST /apps/{id}:publish) after every create/update import. Leave false to keep the " +
+					"app on its last published version; the draft is still imported either way. " +
+					"Only `workflow` and `advanced-chat` apps have drafts — other modes are live as soon " +
+					"as the import lands, so `publish` is ignored for them.",
+				Optional: true,
+				Computed: true,
+				Default:  booldefault.StaticBool(false),
+			},
+			"service_api_enabled": schema.BoolAttribute{
+				MarkdownDescription: "Whether the app's Service API is on (PATCH /apps/{id}/service-api, " +
+					"or /service-api/agent when mode is `agent`). When set, create/update apply it after " +
+					"the import; read refreshes it from the server. **Warning**: this server's app " +
+					"management calls (DSL export, publish, versions) require the Service API — with " +
+					"`service_api_enabled = false`, Read/Update of this resource fail.",
+				Optional: true,
 				Computed: true,
 			},
 		},
@@ -254,6 +281,57 @@ func writeOverrideFlags(ctx context.Context, private privateStateWriter, overrid
 	return private.SetKey(ctx, attrOverridesPrivateKey, raw)
 }
 
+// ModifyPlan warns when publish is requested for a mode the publish op does
+// not serve. mode is computed, so the warning fires only once state knows it;
+// on create of a non-graph mode the call is skipped silently.
+func (r *AppResource) ModifyPlan(ctx context.Context, req resource.ModifyPlanRequest, resp *resource.ModifyPlanResponse) {
+	var plan, state AppResourceModel
+	resp.Diagnostics.Append(req.Plan.Get(ctx, &plan)...)
+	resp.Diagnostics.Append(req.State.Get(ctx, &state)...)
+	if resp.Diagnostics.HasError() {
+		return
+	}
+	if plan.Publish.ValueBool() && state.Mode.ValueString() != "" &&
+		!appModesWithDrafts[state.Mode.ValueString()] {
+		resp.Diagnostics.AddWarning(
+			"publish is ignored for this app mode",
+			fmt.Sprintf("Only workflow and advanced-chat apps have drafts; mode %q is live "+
+				"as soon as the import lands, so POST /apps/{id}:publish is skipped.",
+				state.Mode.ValueString()),
+		)
+	}
+}
+
+// applyPostImport runs the lifecycle calls that follow a DSL import: publish
+// when requested and the app has drafts, the configured Service API toggle,
+// and a service-api read to fill service_api_enabled. modeAgent reports
+// whether the app uses the /service-api/agent endpoints (mode `agent`); any
+// other mode uses the regular ones.
+func (r *AppResource) applyPostImport(ctx context.Context, data *AppResourceModel, configuredServiceAPI bool) error {
+	appID := data.ID.ValueString()
+
+	if data.Publish.ValueBool() && appModesWithDrafts[data.Mode.ValueString()] {
+		if _, err := r.client.PublishApp(ctx, appID, "", ""); err != nil {
+			return fmt.Errorf("unable to publish app: %s", err)
+		}
+	}
+
+	modeAgent := data.Mode.ValueString() == "agent"
+	if configuredServiceAPI {
+		if _, err := r.client.SetServiceAPI(ctx, appID, modeAgent, data.ServiceAPIEnabled.ValueBool()); err != nil {
+			return fmt.Errorf("unable to set app Service API: %s", err)
+		}
+	}
+
+	serviceAPI, err := r.client.GetServiceAPI(ctx, appID, modeAgent)
+	if err != nil {
+		return fmt.Errorf("unable to read app Service API: %s", err)
+	}
+	data.ServiceAPIEnabled = types.BoolValue(serviceAPI.Enabled)
+
+	return nil
+}
+
 func (r *AppResource) Create(ctx context.Context, req resource.CreateRequest, resp *resource.CreateResponse) {
 	var data AppResourceModel
 	var cfg AppResourceModel
@@ -284,6 +362,12 @@ func (r *AppResource) Create(ctx context.Context, req resource.CreateRequest, re
 
 	data.ID = types.StringValue(result.AppID)
 	applyExport(&data, export, overrides)
+
+	if err := r.applyPostImport(ctx, &data, !cfg.ServiceAPIEnabled.IsNull()); err != nil {
+		resp.Diagnostics.AddError("Client Error", err.Error())
+		return
+	}
+
 	if resp.Private != nil {
 		resp.Diagnostics.Append(writeOverrideFlags(ctx, resp.Private, overrides)...)
 	}
@@ -305,11 +389,26 @@ func (r *AppResource) Read(ctx context.Context, req resource.ReadRequest, resp *
 			resp.State.RemoveResource(ctx)
 			return
 		}
+		if isServiceAPIDisabled(err) {
+			resp.Diagnostics.AddError(
+				"App Service API Disabled",
+				"The server requires the app's Service API for DSL export and other management calls, "+
+					"but it is turned off for this app. Re-enable it via the console or set "+
+					"service_api_enabled = true before reading or updating this resource.")
+			return
+		}
 		resp.Diagnostics.AddError("Client Error", fmt.Sprintf("Unable to export app DSL: %s", err))
 		return
 	}
 
 	applyExport(&data, export, readOverrideFlags(ctx, req.Private))
+
+	serviceAPI, err := r.client.GetServiceAPI(ctx, data.ID.ValueString(), data.Mode.ValueString() == "agent")
+	if err != nil {
+		resp.Diagnostics.AddError("Client Error", fmt.Sprintf("Unable to read app Service API: %s", err))
+		return
+	}
+	data.ServiceAPIEnabled = types.BoolValue(serviceAPI.Enabled)
 
 	resp.Diagnostics.Append(resp.State.Set(ctx, &data)...)
 }
@@ -345,6 +444,12 @@ func (r *AppResource) Update(ctx context.Context, req resource.UpdateRequest, re
 	}
 
 	applyExport(&data, export, overrides)
+
+	if err := r.applyPostImport(ctx, &data, !cfg.ServiceAPIEnabled.IsNull()); err != nil {
+		resp.Diagnostics.AddError("Client Error", err.Error())
+		return
+	}
+
 	if resp.Private != nil {
 		resp.Diagnostics.Append(writeOverrideFlags(ctx, resp.Private, overrides)...)
 	}

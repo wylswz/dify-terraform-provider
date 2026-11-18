@@ -5,6 +5,7 @@ package provider
 
 import (
 	"context"
+	"fmt"
 	"os"
 
 	"github.com/hashicorp/terraform-plugin-framework/datasource"
@@ -55,7 +56,9 @@ func (p *DifyProvider) Schema(ctx context.Context, req provider.SchemaRequest, r
 			},
 			"workspace_id": schema.StringAttribute{
 				MarkdownDescription: "Default workspace ID for resource operations. " +
-					"Can also be set via `DIFY_WORKSPACE_ID` environment variable.",
+					"Can also be set via `DIFY_WORKSPACE_ID` environment variable. " +
+					"When neither is set, the provider resolves the token owner's default " +
+					"workspace from `GET /openapi/v1/account`.",
 				Optional: true,
 			},
 		},
@@ -82,11 +85,6 @@ func (p *DifyProvider) Configure(ctx context.Context, req provider.ConfigureRequ
 		token = envOr("DIFY_TOKEN", "")
 	}
 
-	workspaceID := data.WorkspaceID.ValueString()
-	if workspaceID == "" {
-		workspaceID = envOr("DIFY_WORKSPACE_ID", "")
-	}
-
 	if token == "" {
 		resp.Diagnostics.AddError(
 			"Missing Dify Personal Access Token",
@@ -95,15 +93,26 @@ func (p *DifyProvider) Configure(ctx context.Context, req provider.ConfigureRequ
 		return
 	}
 
-	if workspaceID == "" {
+	client := NewDifyClient(host, token, "")
+
+	workspaceID, err := resolveWorkspaceID(ctx, client, data.WorkspaceID.ValueString())
+	if err != nil {
 		resp.Diagnostics.AddError(
-			"Missing Dify Workspace ID",
-			"workspace_id must be provided either in the provider config or via the DIFY_WORKSPACE_ID environment variable.",
+			"Unable to Resolve Dify Workspace",
+			fmt.Sprintf("workspace_id was not set and the account lookup failed: %s", err),
 		)
 		return
 	}
-
-	client := NewDifyClient(host, token, workspaceID)
+	if workspaceID == "" {
+		resp.Diagnostics.AddError(
+			"Missing Dify Workspace ID",
+			"No workspace_id in config or DIFY_WORKSPACE_ID, and GET /openapi/v1/account "+
+				"reported no default workspace. Set workspace_id in the provider config or "+
+				"export DIFY_WORKSPACE_ID.",
+		)
+		return
+	}
+	client.WorkspaceID = workspaceID
 	resp.DataSourceData = client
 	resp.ResourceData = client
 }
@@ -112,9 +121,15 @@ func (p *DifyProvider) Resources(ctx context.Context) []func() resource.Resource
 	return []func() resource.Resource{
 		NewAppResource,
 		NewModelProviderCredentialResource,
+		NewModelCredentialResource,
 		NewToolProviderCredentialResource,
 		NewPluginInstallResource,
 		NewAppAPIKeyResource,
+		NewDefaultModelResource,
+		NewModelSettingsResource,
+		NewAPIToolProviderResource,
+		NewMCPProviderResource,
+		NewWorkflowToolResource,
 	}
 }
 
@@ -123,6 +138,7 @@ func (p *DifyProvider) DataSources(ctx context.Context) []func() datasource.Data
 		NewAppDataSource,
 		NewModelsDataSource,
 		NewPluginsDataSource,
+		NewToolsDataSource,
 	}
 }
 
@@ -132,6 +148,23 @@ func New(version string) func() provider.Provider {
 			version: version,
 		}
 	}
+}
+
+// resolveWorkspaceID applies the workspace resolution order: the configured
+// value, then DIFY_WORKSPACE_ID, then the token owner's default workspace
+// from GET /openapi/v1/account.
+func resolveWorkspaceID(ctx context.Context, client *DifyClient, configured string) (string, error) {
+	if configured != "" {
+		return configured, nil
+	}
+	if env := envOr("DIFY_WORKSPACE_ID", ""); env != "" {
+		return env, nil
+	}
+	account, err := client.GetAccount(ctx)
+	if err != nil {
+		return "", err
+	}
+	return account.DefaultWorkspaceID, nil
 }
 
 // envOr returns the environment variable value or the fallback.
