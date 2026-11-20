@@ -23,6 +23,7 @@ import (
 var _ resource.Resource = &AppResource{}
 var _ resource.ResourceWithImportState = &AppResource{}
 var _ resource.ResourceWithModifyPlan = &AppResource{}
+var _ resource.ResourceWithValidateConfig = &AppResource{}
 
 func NewAppResource() resource.Resource {
 	return &AppResource{}
@@ -180,15 +181,39 @@ func (r *AppResource) Schema(ctx context.Context, req resource.SchemaRequest, re
 			},
 			"service_api_enabled": schema.BoolAttribute{
 				MarkdownDescription: "Whether the app's Service API is on (PATCH /apps/{id}/service-api, " +
-					"or /service-api/agent when mode is `agent`). When set, create/update apply it after " +
-					"the import; read refreshes it from the server. **Warning**: this server's app " +
-					"management calls (DSL export, publish, versions) require the Service API — with " +
-					"`service_api_enabled = false`, Read/Update of this resource fail.",
+					"or /service-api/agent when mode is `agent`). When set to `true`, create/update apply " +
+					"it after the import; read refreshes it from the server. Setting `false` is rejected: " +
+					"this server's app management calls (DSL export, publish, versions) require the " +
+					"Service API, so a disabled API would make Read/Update fail.",
 				Optional: true,
 				Computed: true,
 			},
 		},
 	}
+}
+
+// validateServiceAPIEnabled rejects an explicit service_api_enabled = false.
+// Terraform may only learn the concrete value at apply time (unknown at
+// validate), so Create/Update re-check the resolved bool with the same helper.
+func validateServiceAPIEnabled(value types.Bool, diags *diag.Diagnostics) {
+	if value.IsNull() || value.IsUnknown() || value.ValueBool() {
+		return
+	}
+	diags.AddAttributeError(
+		path.Root("service_api_enabled"),
+		"Disabling the App Service API is not supported",
+		"Dify requires the Service API to export the DSL during refresh. "+
+			"Leave this unset or set it to true.",
+	)
+}
+
+func (r *AppResource) ValidateConfig(ctx context.Context, req resource.ValidateConfigRequest, resp *resource.ValidateConfigResponse) {
+	var data AppResourceModel
+	resp.Diagnostics.Append(req.Config.Get(ctx, &data)...)
+	if resp.Diagnostics.HasError() {
+		return
+	}
+	validateServiceAPIEnabled(data.ServiceAPIEnabled, &resp.Diagnostics)
 }
 
 func (r *AppResource) Configure(ctx context.Context, req resource.ConfigureRequest, resp *resource.ConfigureResponse) {
@@ -340,12 +365,41 @@ func (r *AppResource) applyPostImport(ctx context.Context, data *AppResourceMode
 	return nil
 }
 
+// setPartialCreateState prepares state for a failed Create after the app was
+// already created remotely: configured values are preserved while the
+// export-derived attributes fall back to null so Read can repopulate them.
+func setPartialCreateState(data *AppResourceModel, cfg AppResourceModel) {
+	if cfg.Name.IsNull() {
+		data.Name = types.StringNull()
+	} else {
+		data.Name = cfg.Name
+	}
+	if cfg.Description.IsNull() {
+		data.Description = types.StringNull()
+	} else {
+		data.Description = cfg.Description
+	}
+	data.Mode = types.StringNull()
+	data.ExportedDSLYaml = types.StringNull()
+	data.DraftHash = types.StringNull()
+	if !cfg.ServiceAPIEnabled.IsNull() {
+		data.ServiceAPIEnabled = cfg.ServiceAPIEnabled
+	} else {
+		data.ServiceAPIEnabled = types.BoolNull()
+	}
+}
+
 func (r *AppResource) Create(ctx context.Context, req resource.CreateRequest, resp *resource.CreateResponse) {
 	var data AppResourceModel
 	var cfg AppResourceModel
 
 	resp.Diagnostics.Append(req.Plan.Get(ctx, &data)...)
 	resp.Diagnostics.Append(req.Config.Get(ctx, &cfg)...)
+	if resp.Diagnostics.HasError() {
+		return
+	}
+
+	validateServiceAPIEnabled(data.ServiceAPIEnabled, &resp.Diagnostics)
 	if resp.Diagnostics.HasError() {
 		return
 	}
@@ -362,17 +416,32 @@ func (r *AppResource) Create(ctx context.Context, req resource.CreateRequest, re
 		return
 	}
 
+	// The app now exists remotely: record its ID immediately so a failure in
+	// the calls below still leaves state that can refresh or be destroyed.
+	data.ID = types.StringValue(result.AppID)
+
 	export, err := r.client.ExportAppDSL(ctx, result.AppID)
 	if err != nil {
-		resp.Diagnostics.AddError("Client Error", fmt.Sprintf("Unable to export created app DSL: %s", err))
+		resp.Diagnostics.AddError("Client Error",
+			fmt.Sprintf("App %q was created, but exporting its DSL failed: %s", result.AppID, err))
+		setPartialCreateState(&data, cfg)
+		if resp.Private != nil {
+			resp.Diagnostics.Append(writeOverrideFlags(ctx, resp.Private, overrides)...)
+		}
+		resp.Diagnostics.Append(resp.State.Set(ctx, &data)...)
 		return
 	}
 
-	data.ID = types.StringValue(result.AppID)
 	applyExport(&data, export, overrides)
 
 	if err := r.applyPostImport(ctx, &data, !cfg.ServiceAPIEnabled.IsNull()); err != nil {
-		resp.Diagnostics.AddError("Client Error", err.Error())
+		resp.Diagnostics.AddError("Client Error",
+			fmt.Sprintf("App %q was created, but post-import setup failed: %s", result.AppID, err))
+		setPartialCreateState(&data, cfg)
+		if resp.Private != nil {
+			resp.Diagnostics.Append(writeOverrideFlags(ctx, resp.Private, overrides)...)
+		}
+		resp.Diagnostics.Append(resp.State.Set(ctx, &data)...)
 		return
 	}
 
@@ -401,8 +470,8 @@ func (r *AppResource) Read(ctx context.Context, req resource.ReadRequest, resp *
 			resp.Diagnostics.AddError(
 				"App Service API Disabled",
 				"The server requires the app's Service API for DSL export and other management calls, "+
-					"but it is turned off for this app. Re-enable it via the console or set "+
-					"service_api_enabled = true before reading or updating this resource.")
+					"but it is turned off for this app. Re-enable it in the Dify console "+
+					"(app → API access) before reading or updating this resource.")
 			return
 		}
 		resp.Diagnostics.AddError("Client Error", fmt.Sprintf("Unable to export app DSL: %s", err))
@@ -427,6 +496,11 @@ func (r *AppResource) Update(ctx context.Context, req resource.UpdateRequest, re
 
 	resp.Diagnostics.Append(req.Plan.Get(ctx, &data)...)
 	resp.Diagnostics.Append(req.Config.Get(ctx, &cfg)...)
+	if resp.Diagnostics.HasError() {
+		return
+	}
+
+	validateServiceAPIEnabled(data.ServiceAPIEnabled, &resp.Diagnostics)
 	if resp.Diagnostics.HasError() {
 		return
 	}

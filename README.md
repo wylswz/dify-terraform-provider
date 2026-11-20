@@ -3,7 +3,7 @@
 
 [![Tests](https://github.com/wylswz/dify-unofficial-terraform-provider/actions/workflows/test.yml/badge.svg)](https://github.com/wylswz/dify-unofficial-terraform-provider/actions/workflows/test.yml)
 [![Go Report Card](https://goreportcard.com/badge/github.com/wylswz/dify-unofficial-terraform-provider)](https://goreportcard.com/report/github.com/wylswz/dify-unofficial-terraform-provider)
-[![License: MPL-2.0](https://img.shields.io/badge/License-MPL_2.0-brightgreen.svg)](LICENSE)
+[![License: MIT](https://img.shields.io/badge/License-MIT-brightgreen.svg)](LICENSE)
 
 A Terraform provider for managing [Dify](https://dify.ai) applications, model and tool provider credentials, plugin installs, and app API keys as infrastructure-as-code.
 
@@ -12,12 +12,16 @@ The provider talks to Dify's user-scoped OpenAPI (`/openapi/v1`) and authenticat
 ## Requirements
 
 - [Terraform](https://www.terraform.io/downloads.html) >= 1.0
-- [Go](https://go.dev/dl/) >= 1.22 (to build the provider)
-- A Dify instance exposing the `/openapi/v1` API
+- [Go](https://go.dev/dl/) — see `go.mod` for the required version (to build the provider)
+- A Dify instance exposing the `/openapi/v1` API. The provider is acceptance-tested
+  against upstream [langgenius/dify](https://github.com/langgenius/dify) at the
+  commit pinned in [`scripts/dify-commit`](scripts/dify-commit).
 
 ## Personal Access Token
 
-Create a PAT in the Dify console: **account settings → Personal Access Tokens**. The token acts as your user account, so it must have access to the workspace you manage — including workspace-scoped permissions for the operations you run (app import/export, credential management, plugin install, and so on). Treat it like a password: it is stored in Terraform state.
+Create a PAT in the Dify console: **account settings → Personal Access Tokens**. The token acts as your user account, so it must have access to the workspace you manage — including workspace-scoped permissions for the operations you run (app import/export, credential management, plugin install, and so on). Treat it like a password.
+
+Pass the token to the provider through the `DIFY_TOKEN` environment variable (or a sensitive Terraform variable) rather than hardcoding it — the provider token itself is not persisted in state. Resource-level secrets are different: values Dify only returns once, such as `dify_app_api_key` tokens, credential secrets, and MCP headers, **are** marked `Sensitive` but still persist in Terraform state and plan files. Never share raw state or plan output.
 
 ## Installing the Provider
 
@@ -92,7 +96,7 @@ resource "dify_app" "my_workflow" {
 | `exported_dsl_yaml` | String (computed) | DSL YAML exported from the live app |
 | `draft_hash` | String (computed) | Draft hash returned by the export; sent back on overwrite imports |
 | `publish` | Bool (optional, default `false`) | Publish the app after create/update (`POST /apps/{id}:publish`). Only `workflow`/`advanced-chat` apps have drafts — other modes are live on import and `publish` is ignored |
-| `service_api_enabled` | Bool (optional, computed) | Enable the app's service API endpoint; read back from the server. **Warning:** this server's management calls (DSL export, publish, versions) require the Service API — with `false`, Read/Update of the resource fail |
+| `service_api_enabled` | Bool (optional, computed) | Enable the app's service API endpoint; read back from the server. Setting `false` is rejected: this server's management calls (DSL export, publish, versions) require the Service API |
 
 **Replace-on-update caveat**: the OpenAPI only overwrites `workflow` and `advanced-chat` apps in place. For apps of any other mode (`chat`, `agent-chat`, `completion`, `agent`), changing `dsl_yaml`, `name`, or `description` **replaces** the app (delete + create) — plan accordingly, since replacement generates a new app ID.
 
@@ -418,6 +422,9 @@ make build      # compile the provider
 make install    # install into $GOBIN for dev_overrides
 make test       # unit tests (httptest-based, no Dify needed)
 make testacc    # acceptance tests against a live Dify (needs TF_ACC=1 + DIFY_*)
+
+# or end-to-end against a real upstream Dify stack pinned to scripts/dify-commit:
+bash scripts/dify-acceptance.sh [path/to/local/dify-repo]
 make lint       # golangci-lint
 make generate   # terraform fmt examples + regenerate docs/ via tfplugindocs
 ```
@@ -439,4 +446,6 @@ After apply, `exported_dsl_yaml` holds the server-normalized DSL — useful for 
 
 ## License
 
-MPL-2.0
+See [LICENSE](LICENSE) for the repository's MIT license text. Files with an
+explicit SPDX notice retain the license stated in that notice (currently
+`MPL-2.0`; the full MPL-2.0 text is included in [LICENSES/MPL-2.0.txt](LICENSES/MPL-2.0.txt)).

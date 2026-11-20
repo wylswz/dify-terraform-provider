@@ -38,7 +38,7 @@ resource "dify_app" "my_workflow" {
 - `description` (String) App description. Overrides the DSL description when set.
 - `name` (String) App name. Overrides the name in the DSL when set.
 - `publish` (Boolean) Publish the imported draft as a new version and make the app use it (POST /apps/{id}:publish) after every create/update import. Leave false to keep the app on its last published version; the draft is still imported either way. Only `workflow` and `advanced-chat` apps have drafts — other modes are live as soon as the import lands, so `publish` is ignored for them.
-- `service_api_enabled` (Boolean) Whether the app's Service API is on (PATCH /apps/{id}/service-api, or /service-api/agent when mode is `agent`). When set, create/update apply it after the import; read refreshes it from the server. **Warning**: this server's app management calls (DSL export, publish, versions) require the Service API — with `service_api_enabled = false`, Read/Update of this resource fail.
+- `service_api_enabled` (Boolean) Whether the app's Service API is on (PATCH /apps/{id}/service-api, or /service-api/agent when mode is `agent`). When set to `true`, create/update apply it after the import; read refreshes it from the server. Setting `false` is rejected: this server's app management calls (DSL export, publish, versions) require the Service API, so a disabled API would make Read/Update fail.
 
 ### Read-Only
 

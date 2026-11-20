@@ -10,8 +10,10 @@ Requirements:
 - [Go](https://go.dev/dl/) (see `go.mod` for the required version)
 - [Terraform](https://developer.hashicorp.com/terraform/install) >= 1.0
 - [golangci-lint](https://golangci-lint.run/welcome/install/) for `make lint`
-- A Dify instance for manual/acceptance testing (a local [self-hosted
-  deployment](https://github.com/langgenius/dify) works fine)
+- [Docker](https://docs.docker.com/get-docker/) with Compose v2 for the
+  scripted acceptance run
+- A Dify instance for manual testing — the acceptance script boots the pinned
+  upstream stack itself, so you only need your own instance for ad-hoc runs
 
 ```bash
 git clone https://github.com/wylswz/dify-unofficial-terraform-provider.git
@@ -52,12 +54,37 @@ provider_installation {
 # Unit tests (no Dify instance needed — they run against httptest servers)
 make test
 
-# Acceptance tests against a live Dify instance
+# End-to-end acceptance: boots the upstream Dify Docker Compose stack pinned
+# to scripts/dify-commit (Dify images retagged to that commit SHA), initializes
+# the console, mints a PAT, and runs `make testacc`. Pass a local langgenius/dify
+# checkout to reuse it instead of fetching from GitHub:
+bash scripts/dify-acceptance.sh [path/to/dify]
+
+# Or against your own instance — always point this at a dedicated, throwaway
+# workspace, never a shared or production one:
 export DIFY_HOST="http://localhost"
 export DIFY_TOKEN="<personal-access-token>"
 export DIFY_WORKSPACE_ID="<workspace-id>"   # optional
 make testacc
+
+# Full parity: runs the real examples/complete graph verbatim against the
+# live instance — needs external credentials it consumes:
+export OPENAI_API_KEY=... TAVILY_API_KEY=...   # optional: MCP_SERVER_URL=...
+make testacc-complete        # or: bash scripts/dify-acceptance.sh --complete
 ```
+
+Acceptance tests only run under `TF_ACC=1` (set by `make testacc`) and fail —
+never silently skip — when `DIFY_HOST`/`DIFY_TOKEN` are missing. They create
+and destroy real apps in the configured workspace.
+
+Acceptance Terraform configurations live in
+`internal/provider/testdata/acceptance/<scenario>/` — one directory per
+scenario, holding a static `main.tf` plus any fixtures (e.g. `workflow.yml`).
+Run-to-run variation goes through Terraform `variable`s supplied with `-var`
+flags, not string-templated HCL in Go. Tests copy the scenario directory into
+a temp dir before invoking the Terraform CLI so state, plans and lockfiles
+never pollute `testdata/`. Keep `terraform fmt -check -recursive
+internal/provider/testdata/acceptance` clean.
 
 Unit tests must pass in CI. Please add or update tests for any client or
 resource behavior you change — see `internal/provider/*_test.go` for the
@@ -92,6 +119,15 @@ commit the updated `docs/` — CI verifies they are in sync.
 - Examples: `examples/resources/<type>/resource.tf`,
   `examples/data-sources/<type>/data-source.tf`,
   `examples/resources/<type>/import.sh` for importable resources
+
+## Secrets and State
+
+Keep pull requests free of secrets: never commit `.env` files, PATs, app API
+keys, or Terraform state/plan output. Resource attributes containing secrets
+are marked `Sensitive`, but `Sensitive` still persists values in state — treat
+`terraform.tfstate` and saved plan files as secret material (they are already
+git-ignored; do not force-add them). The acceptance script writes the PAT it
+mints only to its scratch directory and masks it in CI logs.
 
 ## Commit Style
 

@@ -1,0 +1,33 @@
+{
+  "openapi": "3.0.0",
+  "info": {
+    "title": "Acceptance Stub API",
+    "description": "Static OpenAPI document for acceptance tests; never invoked",
+    "version": "1.0.0"
+  },
+  "servers": [
+    {
+      "url": "https://example.invalid"
+    }
+  ],
+  "paths": {
+    "/echo": {
+      "get": {
+        "operationId": "get_echo",
+        "summary": "Echo a message",
+        "parameters": [
+          {
+            "name": "message",
+            "in": "query",
+            "required": true,
+            "schema": { "type": "string" },
+            "description": "Message to echo"
+          }
+        ],
+        "responses": {
+          "200": { "description": "Echo JSON" }
+        }
+      }
+    }
+  }
+}
