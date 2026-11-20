@@ -5,6 +5,11 @@
 
 version: 2
 
+# Release asset names must follow the Terraform Registry convention
+# terraform-provider-<type>_<version>_<os>_<arch>.zip — the repository name
+# does not, so set it explicitly.
+project_name: terraform-provider-dify
+
 before:
   hooks:
     - go mod tidy
