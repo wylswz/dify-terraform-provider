@@ -50,16 +50,34 @@ echo "==> scratch dir: $scratch"
 echo "==> compose project: $project"
 echo "==> pinned dify commit: $DIFY_COMMIT"
 
+compose_started=0
+
 cleanup() {
+	local status="$1"
 	if [ "${DIFY_ACCEPTANCE_KEEP:-0}" = "1" ]; then
 		echo "==> DIFY_ACCEPTANCE_KEEP=1 set; leaving stack '$project' and $scratch in place"
-		return
+		return "$status"
 	fi
-	echo "==> tearing down compose project $project"
-	(cd "$scratch/docker" 2>/dev/null && docker compose -p "$project" down -v --remove-orphans) || true
-	rm -rf "$scratch"
+	if [ "$compose_started" = "1" ]; then
+		echo "==> tearing down compose project $project"
+		if ! (cd "$scratch/docker" && docker compose -p "$project" down -v --remove-orphans); then
+			echo "error: failed to stop compose project $project; leaving $scratch in place" >&2
+			return "$((status != 0 ? status : 1))"
+		fi
+	fi
+	# Compose down removes named volumes, not bind-mounted data owned by container UIDs.
+	if [ -d "$scratch/docker/volumes" ] && ! docker run --rm --network none --read-only --user 0:0 \
+		--mount "type=bind,source=$scratch/docker/volumes,target=/cleanup" \
+		busybox:latest sh -ec 'rm -rf /cleanup/.[!.]* /cleanup/..?* /cleanup/*'; then
+		echo "error: could not remove bind-mounted data; leaving $scratch in place" >&2
+		return "$((status != 0 ? status : 1))"
+	fi
+	if ! rm -rf "$scratch"; then
+		return "$((status != 0 ? status : 1))"
+	fi
+	return "$status"
 }
-trap cleanup EXIT
+trap 'cleanup "$?" || exit "$?"' EXIT
 
 diagnostics() {
 	echo "==> compose status (project $project):" >&2
@@ -127,6 +145,7 @@ export DIFY_HOST="http://127.0.0.1:$port"
 echo "==> nginx host port: $port"
 
 echo "==> docker compose up -d"
+compose_started=1
 (cd "$scratch/docker" && docker compose -p "$project" up -d)
 
 base="$DIFY_HOST"
