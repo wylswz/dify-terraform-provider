@@ -197,14 +197,29 @@ func (r *ModelSettingsResource) Read(ctx context.Context, req resource.ReadReque
 	data.Enabled = types.BoolValue(settings.Enabled)
 	data.LoadBalancingEnabled = types.BoolValue(settings.LoadBalancing.Enabled)
 
+	// The server synthesizes an __inherit__ row whenever provider credentials
+	// exist, so reads always report at least that entry. Only a configured
+	// null credential_id declares it; an undeclared inherit row is filtered out
+	// or it would show as a perpetual diff.
+	declaredInherit := false
+	for _, e := range data.LoadBalancingEntries {
+		if e.CredentialID.IsNull() {
+			declaredInherit = true
+		}
+	}
 	entries := make([]ModelSettingsEntryModel, 0, len(settings.LoadBalancing.Entries))
 	for _, e := range settings.LoadBalancing.Entries {
+		if e.Inherit && !declaredInherit {
+			continue
+		}
 		entries = append(entries, ModelSettingsEntryModel{
 			CredentialID: types.StringPointerValue(e.CredentialID),
 			Enabled:      types.BoolValue(e.Enabled),
 		})
 	}
-	data.LoadBalancingEntries = entries
+	if len(entries) > 0 || data.LoadBalancingEntries != nil {
+		data.LoadBalancingEntries = entries
+	}
 
 	resp.Diagnostics.Append(resp.State.Set(ctx, &data)...)
 }
