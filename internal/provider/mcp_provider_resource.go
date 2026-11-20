@@ -8,6 +8,8 @@ import (
 	"encoding/json"
 	"fmt"
 
+	"github.com/hashicorp/terraform-plugin-framework/diag"
+
 	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
@@ -189,15 +191,20 @@ func (m *MCPProviderResourceModel) applyResult(result *MCPProvider) {
 
 // syncTools records the provider's tools, refreshing once when the write came
 // back without any (the server fetches tools best-effort on create/update).
-func (r *MCPProviderResource) syncTools(ctx context.Context, data *MCPProviderResourceModel) error {
+// A failed refresh warns but does not fail the operation: the provider exists
+// on the server, so erroring here would strand it outside of state.
+func (r *MCPProviderResource) syncTools(ctx context.Context, data *MCPProviderResourceModel, diags *diag.Diagnostics) {
 	if data.Tools.IsNull() || len(data.Tools.Elements()) == 0 {
 		result, err := r.client.RefreshMCPProvider(ctx, data.ID.ValueString())
 		if err != nil {
-			return fmt.Errorf("unable to refresh MCP provider tools: %s", err)
+			diags.AddWarning(
+				"MCP Tool Refresh Failed",
+				fmt.Sprintf("The provider was saved but its tools could not be fetched: %s. "+
+					"tools stays empty until the next refresh; the server may need authorization.", err))
+			return
 		}
 		data.Tools = stringList(result.Tools)
 	}
-	return nil
 }
 
 func (r *MCPProviderResource) Create(ctx context.Context, req resource.CreateRequest, resp *resource.CreateResponse) {
@@ -215,10 +222,7 @@ func (r *MCPProviderResource) Create(ctx context.Context, req resource.CreateReq
 	}
 
 	data.applyResult(result)
-	if err := r.syncTools(ctx, &data); err != nil {
-		resp.Diagnostics.AddError("Client Error", err.Error())
-		return
-	}
+	r.syncTools(ctx, &data, &resp.Diagnostics)
 
 	resp.Diagnostics.Append(resp.State.Set(ctx, &data)...)
 }
@@ -261,10 +265,7 @@ func (r *MCPProviderResource) Update(ctx context.Context, req resource.UpdateReq
 	}
 
 	data.applyResult(result)
-	if err := r.syncTools(ctx, &data); err != nil {
-		resp.Diagnostics.AddError("Client Error", err.Error())
-		return
-	}
+	r.syncTools(ctx, &data, &resp.Diagnostics)
 
 	resp.Diagnostics.Append(resp.State.Set(ctx, &data)...)
 }
