@@ -40,13 +40,13 @@ owner's default workspace). Other optional vars: `openai_api_key_backup`
 
 ### Running against a locally built provider
 
-`langgenius/dify` is not published, so point Terraform at a local `make
+`wylswz/dify` is not published, so point Terraform at a local `make
 install` build with a `dev_overrides` CLI config:
 
 ```hcl
 provider_installation {
   dev_overrides {
-    "langgenius/dify" = "<path to the built provider dir, e.g. ~/.terraform.d/plugins/registry.terraform.io/dify/dify/0.1.0/darwin_arm64>"
+    "wylswz/dify" = "<path to the built provider dir, e.g. ~/.terraform.d/plugins/registry.terraform.io/wylswz/dify/0.1.0/darwin_arm64>"
   }
   direct {}
 }

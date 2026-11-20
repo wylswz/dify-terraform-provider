@@ -1,4 +1,4 @@
-module github.com/dify/dify-tf
+module github.com/wylswz/dify-unofficial-terraform-provider
 
 go 1.26.2
 

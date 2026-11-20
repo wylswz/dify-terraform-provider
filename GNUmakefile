@@ -3,7 +3,7 @@
 
 TEST?=$$(go list ./... | grep -v /vendor/)
 HOSTNAME=registry.terraform.io
-NAMESPACE=dify
+NAMESPACE=wylswz
 NAME=dify
 BINARY=terraform-provider-${NAME}
 VERSION=0.1.0
