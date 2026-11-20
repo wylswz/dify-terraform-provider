@@ -7,14 +7,16 @@ NAMESPACE=wylswz
 NAME=dify
 BINARY=terraform-provider-${NAME}
 VERSION=0.0.1
+GOBIN_DIR ?= $(or $(shell go env GOBIN),$(shell go env GOPATH)/bin)
 
 default: fmt lint install generate
 
 build:
-	go build -v ./...
+	go build -o $(BINARY) .
 
 install: build
-	go install -v ./...
+	mkdir -p "$(GOBIN_DIR)"
+	cp "$(BINARY)" "$(GOBIN_DIR)/$(BINARY)"
 
 # Install into the local Terraform plugin mirror for dev overrides.
 install-local: build
@@ -30,15 +32,22 @@ fmt:
 
 generate:
 	terraform fmt -recursive ./examples/
+	terraform fmt -check -recursive ./internal/provider/testdata/acceptance
 	go run github.com/hashicorp/terraform-plugin-docs/cmd/tfplugindocs generate -provider-name dify
 
 test:
 	go test -v -cover -timeout=120s -parallel=10 ${TEST}
 
-# Acceptance tests require a live Dify instance. Set TF_ACC=1 plus
-# DIFY_HOST / DIFY_TOKEN (and optionally DIFY_WORKSPACE_ID).
+# Acceptance tests require a live Dify instance. They only run under TF_ACC=1
+# and fail (never silently skip) without live DIFY_HOST / DIFY_TOKEN.
+# scripts/dify-acceptance.sh boots a pinned upstream Dify and sets these.
 testacc:
-	TF_ACC=1 go test -v -cover -timeout 120m ${TEST}
+	TF_ACC=1 go test -v -count=1 -timeout=20m -run '^(TestAccAppLifecycle|TestAccTools|TestAccAppCreatePartialFailure)$$' ./internal/provider
+
+# Full parity run of examples/complete: additionally needs TF_ACC_COMPLETE=1
+# plus OPENAI_API_KEY / TAVILY_API_KEY (and optionally MCP_SERVER_URL).
+testacc-complete:
+	TF_ACC=1 TF_ACC_COMPLETE=1 go test -v -count=1 -timeout=30m -run '^TestAccComplete$$' ./internal/provider
 
 clean:
 	rm -f ${BINARY}
@@ -47,4 +56,4 @@ clean:
 dev:
 	go run main.go -debug
 
-.PHONY: build install install-local lint fmt generate test testacc clean dev
+.PHONY: build install install-local lint fmt generate test testacc testacc-complete clean dev
