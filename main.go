@@ -8,8 +8,8 @@ import (
 	"flag"
 	"log"
 
-	"github.com/dify/dify-tf/internal/provider"
 	"github.com/hashicorp/terraform-plugin-framework/providerserver"
+	"github.com/wylswz/dify-unofficial-terraform-provider/internal/provider"
 )
 
 var (
@@ -23,7 +23,7 @@ func main() {
 	flag.Parse()
 
 	opts := providerserver.ServeOpts{
-		Address: "registry.terraform.io/dify/dify",
+		Address: "registry.terraform.io/wylswz/dify",
 		Debug:   debug,
 	}
 
