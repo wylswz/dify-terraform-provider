@@ -1,0 +1,24 @@
+# Copyright Dify Corp. 2025
+# SPDX-License-Identifier: MPL-2.0
+
+# See https://docs.github.com/en/code-security/dependabot/dependabot-version-updates
+version: 2
+
+updates:
+  - package-ecosystem: gomod
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 10
+    groups:
+      hashicorp:
+        patterns:
+          - "github.com/hashicorp/*"
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5

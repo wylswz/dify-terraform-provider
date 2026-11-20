@@ -14,7 +14,7 @@ import (
 func TestPublishApp(t *testing.T) {
 	var gotMethod, gotPath string
 	var gotBody map[string]any
-	client, _, _ := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+	client, _ := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		gotMethod = r.Method
 		gotPath = r.URL.Path
@@ -40,7 +40,7 @@ func TestPublishApp(t *testing.T) {
 func TestServiceAPIAgentPathAndPatchBody(t *testing.T) {
 	var gotMethod, gotPath string
 	var gotBody map[string]any
-	client, _, _ := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+	client, _ := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		gotMethod = r.Method
 		gotPath = r.URL.Path
@@ -62,7 +62,7 @@ func TestServiceAPIAgentPathAndPatchBody(t *testing.T) {
 		t.Fatal("expected enabled response")
 	}
 
-	result, err = client.GetServiceAPI(context.Background(), "app-1", false)
+	_, err = client.GetServiceAPI(context.Background(), "app-1", false)
 	if err != nil {
 		t.Fatalf("GetServiceAPI failed: %v", err)
 	}
@@ -73,7 +73,7 @@ func TestServiceAPIAgentPathAndPatchBody(t *testing.T) {
 
 func TestActivateModelProviderCredential(t *testing.T) {
 	var gotMethod, gotPath string
-	client, _, _ := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+	client, _ := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		gotMethod = r.Method
 		gotPath = r.URL.Path
@@ -95,7 +95,7 @@ func TestActivateModelProviderCredential(t *testing.T) {
 
 func TestModelScopedCredentialRoundTrip(t *testing.T) {
 	var calls []string
-	client, _, _ := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+	client, _ := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		calls = append(calls, r.Method+" "+r.URL.RequestURI())
 		var body map[string]any
@@ -156,7 +156,7 @@ func TestModelScopedCredentialRoundTrip(t *testing.T) {
 }
 
 func TestModelScopedCredentialNotFound(t *testing.T) {
-	client, _, _ := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+	client, _ := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusNotFound)
 		_, _ = w.Write([]byte(`{"code":"credential_not_found","message":"nope","status":404}`))
@@ -170,7 +170,7 @@ func TestModelScopedCredentialNotFound(t *testing.T) {
 
 func TestDefaultModelAndSettings(t *testing.T) {
 	var calls []string
-	client, _, _ := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+	client, _ := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		calls = append(calls, r.Method+" "+r.URL.RequestURI())
 		switch {
@@ -234,7 +234,7 @@ func strptr(s string) *string { return &s }
 func TestAPIToolProviderRename(t *testing.T) {
 	var gotPath, gotMethod string
 	var gotBody map[string]any
-	client, _, _ := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+	client, _ := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		gotMethod = r.Method
 		gotPath = r.URL.Path
@@ -265,7 +265,7 @@ func TestAPIToolProviderRename(t *testing.T) {
 }
 
 func TestAPIToolProviderNotFound(t *testing.T) {
-	client, _, _ := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+	client, _ := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusNotFound)
 		_, _ = w.Write([]byte(`{"code":"provider_not_found","message":"missing","status":404}`))
@@ -279,7 +279,7 @@ func TestAPIToolProviderNotFound(t *testing.T) {
 
 func TestMCPProviderRoundTripAndRefresh(t *testing.T) {
 	var calls []string
-	client, _, _ := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+	client, _ := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		calls = append(calls, r.Method+" "+r.URL.Path)
 		switch {
@@ -335,7 +335,7 @@ func TestMCPProviderRoundTripAndRefresh(t *testing.T) {
 
 func TestWorkflowToolCreateAndUpdate(t *testing.T) {
 	var gotCreate, gotUpdate map[string]any
-	client, _, _ := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+	client, _ := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		switch {
 		case strings.HasSuffix(r.URL.Path, "/workflow-tools") && r.Method == http.MethodPost:
@@ -384,7 +384,7 @@ func TestWorkflowToolCreateAndUpdate(t *testing.T) {
 }
 
 func TestWorkflowToolNotFound(t *testing.T) {
-	client, _, _ := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+	client, _ := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusNotFound)
 		_, _ = w.Write([]byte(`{"code":"provider_not_found","message":"missing","status":404}`))
@@ -397,7 +397,7 @@ func TestWorkflowToolNotFound(t *testing.T) {
 }
 
 func TestListToolsPaginatesAndCarriesNodeData(t *testing.T) {
-	client, _, _ := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+	client, _ := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		if r.URL.Path != "/openapi/v1/workspaces/ws-1/tools" {
 			w.WriteHeader(http.StatusNotFound)

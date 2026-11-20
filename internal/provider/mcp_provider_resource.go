@@ -32,17 +32,17 @@ type MCPProviderResource struct {
 
 // MCPProviderResourceModel describes the resource data model.
 type MCPProviderResourceModel struct {
-	ID               types.String   `tfsdk:"id"`
-	Name             types.String   `tfsdk:"name"`
-	ServerURL        types.String   `tfsdk:"server_url"`
-	ServerIdentifier types.String   `tfsdk:"server_identifier"`
-	Icon             types.String   `tfsdk:"icon"`
-	IconType         types.String   `tfsdk:"icon_type"`
-	IconBackground   types.String   `tfsdk:"icon_background"`
-	Headers          types.Map      `tfsdk:"headers"`
-	Timeout          types.Float64  `tfsdk:"timeout"`
-	SSEReadTimeout   types.Float64  `tfsdk:"sse_read_timeout"`
-	Tools            types.List     `tfsdk:"tools"`
+	ID               types.String  `tfsdk:"id"`
+	Name             types.String  `tfsdk:"name"`
+	ServerURL        types.String  `tfsdk:"server_url"`
+	ServerIdentifier types.String  `tfsdk:"server_identifier"`
+	Icon             types.String  `tfsdk:"icon"`
+	IconType         types.String  `tfsdk:"icon_type"`
+	IconBackground   types.String  `tfsdk:"icon_background"`
+	Headers          types.Map     `tfsdk:"headers"`
+	Timeout          types.Float64 `tfsdk:"timeout"`
+	SSEReadTimeout   types.Float64 `tfsdk:"sse_read_timeout"`
+	Tools            types.List    `tfsdk:"tools"`
 }
 
 func (r *MCPProviderResource) Metadata(ctx context.Context, req resource.MetadataRequest, resp *resource.MetadataResponse) {

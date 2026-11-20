@@ -1,0 +1,32 @@
+name: Feature Request
+description: Suggest a new resource, data source, or improvement
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: description
+    attributes:
+      label: Description
+      description: What would you like to see? e.g. a dify_dataset resource, a new attribute on dify_app.
+    validations:
+      required: true
+
+  - type: textarea
+    id: usecase
+    attributes:
+      label: Use Case
+      description: What problem does this solve for you?
+    validations:
+      required: true
+
+  - type: textarea
+    id: api
+    attributes:
+      label: Dify API Coverage
+      description: If the feature needs a Dify OpenAPI endpoint, link or describe it. Features the workspace OpenAPI does not expose cannot be implemented in this provider.
+
+  - type: textarea
+    id: config
+    attributes:
+      label: Proposed Configuration
+      description: What would the HCL look like?
+      render: hcl
