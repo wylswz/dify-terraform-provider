@@ -33,17 +33,17 @@ func withCatalog(versionHits *atomic.Int32, fingerprint string, next http.Handle
 	}
 }
 
-func newTestClient(t *testing.T, handler http.HandlerFunc) (*DifyClient, *httptest.Server, *atomic.Int32) {
+func newTestClient(t *testing.T, handler http.HandlerFunc) (*DifyClient, *atomic.Int32) {
 	t.Helper()
 	var versionHits atomic.Int32
 	srv := httptest.NewServer(withCatalog(&versionHits, "fp-1", handler))
 	t.Cleanup(srv.Close)
-	return NewDifyClient(srv.URL, "test-token", "ws-1"), srv, &versionHits
+	return NewDifyClient(srv.URL, "test-token", "ws-1"), &versionHits
 }
 
 func TestBearerHeaderAndBasePath(t *testing.T) {
 	var gotAuth, gotCatalog, gotPath string
-	client, _, versionHits := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+	client, versionHits := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
 		gotAuth = r.Header.Get("Authorization")
 		gotCatalog = r.Header.Get("X-Dify-Catalog")
 		gotPath = r.URL.Path
@@ -73,7 +73,7 @@ func TestBearerHeaderAndBasePath(t *testing.T) {
 func TestCatalogStaleRetriesOnce(t *testing.T) {
 	var attempts atomic.Int32
 	var retriedCatalog string
-	client, _, versionHits := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+	client, versionHits := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		if attempts.Add(1) == 1 {
 			w.Header().Set("X-Dify-Catalog", "fp-2")
@@ -102,7 +102,7 @@ func TestCatalogStaleRetriesOnce(t *testing.T) {
 
 func TestCatalogStalePersistentReturnsError(t *testing.T) {
 	var attempts atomic.Int32
-	client, _, _ := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+	client, _ := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		attempts.Add(1)
 		w.Header().Set("X-Dify-Catalog", "fp-2")
@@ -133,7 +133,7 @@ func TestCatalogStalePersistentReturnsError(t *testing.T) {
 func TestRateLimitRetryAfterHeader(t *testing.T) {
 	var attempts atomic.Int32
 	var sleptFor time.Duration
-	client, _, _ := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+	client, _ := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		if attempts.Add(1) == 1 {
 			w.Header().Set("Retry-After", "2")
@@ -161,7 +161,7 @@ func TestRateLimitRetryAfterHeader(t *testing.T) {
 
 func TestRateLimitRetriesExhausted(t *testing.T) {
 	var attempts, sleeps atomic.Int32
-	client, _, _ := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+	client, _ := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		attempts.Add(1)
 		w.WriteHeader(http.StatusTooManyRequests)
@@ -198,7 +198,7 @@ func TestRateLimitRetriesExhausted(t *testing.T) {
 func TestRateLimitWaitHonoursContextCancel(t *testing.T) {
 	var attempts atomic.Int32
 	ctx, cancel := context.WithCancel(context.Background())
-	client, _, _ := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+	client, _ := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		attempts.Add(1)
 		w.Header().Set("Retry-After", "30")
@@ -220,7 +220,7 @@ func TestRateLimitWaitHonoursContextCancel(t *testing.T) {
 }
 
 func TestAPIErrorParsesErrorBody(t *testing.T) {
-	client, _, _ := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+	client, _ := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusNotFound)
 		_, _ = w.Write([]byte(`{"code":"not_found","message":"App not found","status":404}`))
@@ -250,7 +250,7 @@ func TestAPIErrorParsesErrorBody(t *testing.T) {
 }
 
 func TestImportFailedBadRequest(t *testing.T) {
-	client, _, _ := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+	client, _ := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusBadRequest)
 		_, _ = w.Write([]byte(`{"id":"imp-1","status":"failed","app_id":"","app_mode":"","error":"invalid DSL: missing version"}`))
@@ -267,7 +267,7 @@ func TestImportFailedBadRequest(t *testing.T) {
 
 func TestImportPendingTriggersConfirm(t *testing.T) {
 	var confirmed atomic.Bool
-	client, _, _ := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+	client, _ := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		switch {
 		case r.Method == http.MethodPost && r.URL.Path == "/openapi/v1/workspaces/ws-1/apps/imports":
@@ -296,7 +296,7 @@ func TestImportPendingTriggersConfirm(t *testing.T) {
 
 func TestInstallPluginPollsTaskToSuccess(t *testing.T) {
 	var taskCalls atomic.Int32
-	client, _, _ := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+	client, _ := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		switch {
 		case r.Method == http.MethodPost && r.URL.Path == "/openapi/v1/workspaces/ws-1/plugins:install":
@@ -329,7 +329,7 @@ func TestInstallPluginPollsTaskToSuccess(t *testing.T) {
 }
 
 func TestInstallPluginTaskFailedSurfacesMessages(t *testing.T) {
-	client, _, _ := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+	client, _ := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		switch {
 		case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/plugins:install"):
@@ -353,7 +353,7 @@ func TestInstallPluginTaskFailedSurfacesMessages(t *testing.T) {
 
 func TestGetAccount(t *testing.T) {
 	var gotMethod, gotPath string
-	client, _, _ := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+	client, _ := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
 		gotMethod = r.Method
 		gotPath = r.URL.Path
 		w.Header().Set("Content-Type", "application/json")
@@ -378,7 +378,7 @@ func TestGetAccount(t *testing.T) {
 
 func TestResolveWorkspaceIDOrder(t *testing.T) {
 	accountHits := 0
-	client, _, _ := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+	client, _ := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
 		accountHits++
 		w.Header().Set("Content-Type", "application/json")
 		w.Header().Set("X-Dify-Catalog", "fp-1")

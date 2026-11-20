@@ -111,7 +111,7 @@ func (c *DifyClient) doRequest(ctx context.Context, method, url string, body any
 
 		if resp.StatusCode == http.StatusPreconditionFailed && !catalogRetried {
 			data, readErr := io.ReadAll(resp.Body)
-			resp.Body.Close()
+			_ = resp.Body.Close()
 			if readErr != nil {
 				return nil, fmt.Errorf("failed to read response body: %w", readErr)
 			}
@@ -134,7 +134,7 @@ func (c *DifyClient) doRequest(ctx context.Context, method, url string, body any
 			rateLimitRetries++
 			wait := rateLimitWait(resp, &backoff)
 			_, _ = io.Copy(io.Discard, resp.Body)
-			resp.Body.Close()
+			_ = resp.Body.Close()
 			if err := c.sleep(ctx, wait); err != nil {
 				return nil, err
 			}
@@ -221,7 +221,7 @@ func (c *DifyClient) fetchCatalog(ctx context.Context) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("failed to fetch catalog fingerprint: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	_, _ = io.Copy(io.Discard, resp.Body)
 
 	fingerprint := resp.Header.Get("X-Dify-Catalog")
@@ -297,7 +297,7 @@ func apiErrorFromBody(statusCode int, data []byte) *APIError {
 
 // readResponse reads the whole body and, for non-2xx statuses, returns an APIError.
 func readResponse(resp *http.Response) ([]byte, error) {
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	data, err := io.ReadAll(resp.Body)
 	if err != nil {
@@ -372,7 +372,7 @@ const (
 // readImportResult decodes an import/confirm response. On HTTP 400 the body is
 // the Import shape when the import itself failed, and ErrorBody otherwise.
 func readImportResult(resp *http.Response) (*ImportResult, error) {
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	data, err := io.ReadAll(resp.Body)
 	if err != nil {
@@ -631,14 +631,6 @@ func activeCredentialID(d *providerDescribeResponse) string {
 	}
 	if d.DefaultCredential != nil {
 		return d.DefaultCredential.ID
-	}
-	return ""
-}
-
-// credentialName returns the saved name for id, or "" when absent.
-func credentialName(creds map[string]CredentialRef, id string) string {
-	if ref, ok := creds[id]; ok && ref.Name != nil {
-		return *ref.Name
 	}
 	return ""
 }

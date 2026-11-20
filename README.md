@@ -1,6 +1,10 @@
 > This is a demo project
 # Dify Terraform Provider
 
+[![Tests](https://github.com/wylswz/dify-terraform-provider/actions/workflows/test.yml/badge.svg)](https://github.com/wylswz/dify-terraform-provider/actions/workflows/test.yml)
+[![Go Report Card](https://goreportcard.com/badge/github.com/dify/dify-tf)](https://goreportcard.com/report/github.com/dify/dify-tf)
+[![License: MPL-2.0](https://img.shields.io/badge/License-MPL_2.0-brightgreen.svg)](LICENSE)
+
 A Terraform provider for managing [Dify](https://dify.ai) applications, model and tool provider credentials, plugin installs, and app API keys as infrastructure-as-code.
 
 The provider talks to Dify's user-scoped OpenAPI (`/openapi/v1`) and authenticates with a **Personal Access Token (PAT)** — no admin API key or special backend branch is required.
@@ -49,6 +53,8 @@ The server rate-limits each token on `/openapi/v1` (`OPENAPI_RATE_LIMIT_PER_TOKE
 ![Dependency Graph](img/plan.svg)
 
 ## Resources
+
+Full, generated attribute-level specs for every resource and data source live in [`docs/`](docs/) ([`docs/resources/`](docs/resources/), [`docs/data-sources/`](docs/data-sources/)) — the same documentation the Terraform Registry renders. The sections below are a summary.
 
 ### `dify_app`
 
@@ -394,15 +400,15 @@ Dataset and dataset-document management is **not yet supported** by this provide
 ## Developing the Provider
 
 ```bash
-# Build
-go build ./...
-
-# Install locally for development
-make install
-
-# Run tests
-go test ./...
+make build      # compile the provider
+make install    # install into $GOBIN for dev_overrides
+make test       # unit tests (httptest-based, no Dify needed)
+make testacc    # acceptance tests against a live Dify (needs TF_ACC=1 + DIFY_*)
+make lint       # golangci-lint
+make generate   # terraform fmt examples + regenerate docs/ via tfplugindocs
 ```
+
+See [`CONTRIBUTING.md`](CONTRIBUTING.md) for the full development workflow, and [`CHANGELOG.md`](CHANGELOG.md) for release notes. Releases are automated with GoReleaser — see [`.github/workflows/release.yml`](.github/workflows/release.yml).
 
 ## DSL YAML
 

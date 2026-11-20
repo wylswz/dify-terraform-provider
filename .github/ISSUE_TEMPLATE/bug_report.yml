@@ -1,0 +1,63 @@
+name: Bug Report
+description: Report a problem with the provider
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thank you for taking the time to report a bug. Please fill out the
+        sections below — the more context you provide, the faster we can help.
+
+  - type: textarea
+    id: versions
+    attributes:
+      label: Terraform and Provider Version
+      description: Run `terraform version` and list the provider version from `terraform providers`.
+    validations:
+      required: true
+
+  - type: textarea
+    id: resources
+    attributes:
+      label: Affected Resource(s) or Data Source(s)
+      description: e.g. dify_app, dify_mcp_provider, data dify_tools
+      placeholder: dify_app
+    validations:
+      required: true
+
+  - type: textarea
+    id: config
+    attributes:
+      label: Terraform Configuration
+      description: A minimal configuration that reproduces the issue. Remove tokens and other secrets.
+      render: hcl
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected Behavior
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual Behavior
+      description: Include the relevant `terraform plan/apply` output and error text.
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Debug Output
+      description: If possible, rerun with TF_LOG=DEBUG and paste a Gist link. Redact tokens — they appear in logs.
+      render: shell
+
+  - type: textarea
+    id: references
+    attributes:
+      label: References
+      description: Links to related issues or documentation.
