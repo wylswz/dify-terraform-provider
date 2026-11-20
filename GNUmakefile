@@ -6,7 +6,7 @@ HOSTNAME=registry.terraform.io
 NAMESPACE=wylswz
 NAME=dify
 BINARY=terraform-provider-${NAME}
-VERSION=0.1.0
+VERSION=0.0.1
 
 default: fmt lint install generate
 

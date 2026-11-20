@@ -46,7 +46,7 @@ install` build with a `dev_overrides` CLI config:
 ```hcl
 provider_installation {
   dev_overrides {
-    "wylswz/dify" = "<path to the built provider dir, e.g. ~/.terraform.d/plugins/registry.terraform.io/wylswz/dify/0.1.0/darwin_arm64>"
+    "wylswz/dify" = "<path to the built provider dir, e.g. ~/.terraform.d/plugins/registry.terraform.io/wylswz/dify/0.0.1/darwin_arm64>"
   }
   direct {}
 }

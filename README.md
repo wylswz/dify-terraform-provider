@@ -26,7 +26,7 @@ terraform {
   required_providers {
     dify = {
       source  = "registry.terraform.io/wylswz/dify"
-      version = "0.1.0"
+      version = "0.0.1"
     }
   }
 }
