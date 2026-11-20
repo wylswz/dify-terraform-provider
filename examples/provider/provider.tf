@@ -1,7 +1,7 @@
 terraform {
   required_providers {
     dify = {
-      source = "registry.terraform.io/dify/dify"
+      source = "registry.terraform.io/wylswz/dify"
     }
   }
 }

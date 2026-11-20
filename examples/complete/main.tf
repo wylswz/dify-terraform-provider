@@ -1,8 +1,8 @@
 terraform {
   required_providers {
     dify = {
-      source  = "langgenius/dify"
-      version = "0.1.0"
+      source  = "wylswz/dify"
+      version = "0.0.1"
     }
   }
 }

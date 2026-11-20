@@ -1,8 +1,8 @@
 > This is a demo project
-# Dify Terraform Provider
+# Dify Terraform Provider (Unofficial)
 
-[![Tests](https://github.com/wylswz/dify-terraform-provider/actions/workflows/test.yml/badge.svg)](https://github.com/wylswz/dify-terraform-provider/actions/workflows/test.yml)
-[![Go Report Card](https://goreportcard.com/badge/github.com/dify/dify-tf)](https://goreportcard.com/report/github.com/dify/dify-tf)
+[![Tests](https://github.com/wylswz/dify-unofficial-terraform-provider/actions/workflows/test.yml/badge.svg)](https://github.com/wylswz/dify-unofficial-terraform-provider/actions/workflows/test.yml)
+[![Go Report Card](https://goreportcard.com/badge/github.com/wylswz/dify-unofficial-terraform-provider)](https://goreportcard.com/report/github.com/wylswz/dify-unofficial-terraform-provider)
 [![License: MPL-2.0](https://img.shields.io/badge/License-MPL_2.0-brightgreen.svg)](LICENSE)
 
 A Terraform provider for managing [Dify](https://dify.ai) applications, model and tool provider credentials, plugin installs, and app API keys as infrastructure-as-code.
@@ -25,8 +25,8 @@ Create a PAT in the Dify console: **account settings → Personal Access Tokens*
 terraform {
   required_providers {
     dify = {
-      source  = "registry.terraform.io/dify/dify"
-      version = "0.1.0"
+      source  = "registry.terraform.io/wylswz/dify"
+      version = "0.0.1"
     }
   }
 }

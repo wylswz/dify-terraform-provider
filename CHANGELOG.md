@@ -15,7 +15,7 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   per-resource/data-source examples under `examples/`
 - `CONTRIBUTING.md`, issue templates, and Dependabot configuration
 
-## [0.1.0]
+## [0.0.1]
 
 Initial release.
 

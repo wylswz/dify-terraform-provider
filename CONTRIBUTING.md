@@ -14,8 +14,8 @@ Requirements:
   deployment](https://github.com/langgenius/dify) works fine)
 
 ```bash
-git clone https://github.com/wylswz/dify-terraform-provider.git
-cd dify-terraform-provider
+git clone https://github.com/wylswz/dify-unofficial-terraform-provider.git
+cd dify-unofficial-terraform-provider
 go build ./...
 ```
 
@@ -29,7 +29,7 @@ make build          # go build -v ./...
 make install
 
 # Install into the local plugin mirror
-# (~/.terraform.d/plugins/registry.terraform.io/dify/dify/<version>/<os>_<arch>)
+# (~/.terraform.d/plugins/registry.terraform.io/wylswz/dify/<version>/<os>_<arch>)
 make install-local
 ```
 
@@ -40,7 +40,7 @@ to `~/.terraformrc`:
 ```hcl
 provider_installation {
   dev_overrides {
-    "registry.terraform.io/dify/dify" = "/path/to/go/bin"
+    "registry.terraform.io/wylswz/dify" = "/path/to/go/bin"
   }
   direct {}
 }

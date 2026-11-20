@@ -19,7 +19,7 @@ Create a Personal Access Token in the Dify console: **account settings → Perso
 terraform {
   required_providers {
     dify = {
-      source = "registry.terraform.io/dify/dify"
+      source = "registry.terraform.io/wylswz/dify"
     }
   }
 }
