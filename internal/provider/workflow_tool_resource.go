@@ -204,18 +204,22 @@ func (m *WorkflowToolResourceModel) applyResult(result *WorkflowTool) {
 		Content:    types.StringValue(result.Icon["content"]),
 		Background: types.StringValue(result.Icon["background"]),
 	}
-	m.PrivacyPolicy = types.StringPointerValue(result.PrivacyPolicy)
+	m.PrivacyPolicy = optionalString(result.PrivacyPolicy)
 	m.Synced = types.BoolValue(result.Synced)
 
-	params := make([]WorkflowToolParameterModel, 0, len(result.Parameters))
-	for _, p := range result.Parameters {
-		params = append(params, WorkflowToolParameterModel{
-			Name:        types.StringValue(p.Name),
-			Description: types.StringValue(p.Description),
-			Form:        types.StringValue(p.Form),
-		})
+	// parameters is Optional-only, so an unconfigured null must stay null even
+	// when the server derives entries; configured values store the echo.
+	if m.Parameters != nil && len(result.Parameters) > 0 {
+		params := make([]WorkflowToolParameterModel, 0, len(result.Parameters))
+		for _, p := range result.Parameters {
+			params = append(params, WorkflowToolParameterModel{
+				Name:        types.StringValue(p.Name),
+				Description: types.StringValue(p.Description),
+				Form:        types.StringValue(p.Form),
+			})
+		}
+		m.Parameters = params
 	}
-	m.Parameters = params
 }
 
 func (r *WorkflowToolResource) Create(ctx context.Context, req resource.CreateRequest, resp *resource.CreateResponse) {

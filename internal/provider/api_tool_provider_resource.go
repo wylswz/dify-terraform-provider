@@ -44,7 +44,7 @@ type APIToolProviderResourceModel struct {
 	PrivacyPolicy    types.String              `tfsdk:"privacy_policy"`
 	CustomDisclaimer types.String              `tfsdk:"custom_disclaimer"`
 	Labels           []types.String            `tfsdk:"labels"`
-	Tools            []types.String            `tfsdk:"tools"`
+	Tools            types.List                `tfsdk:"tools"`
 }
 
 func (r *APIToolProviderResource) Metadata(ctx context.Context, req resource.MetadataRequest, resp *resource.MetadataResponse) {
@@ -167,10 +167,12 @@ func (m *APIToolProviderResourceModel) applyResult(result *APIToolProvider) {
 	}
 	m.SchemaType = types.StringValue(result.SchemaType)
 	m.Schema = types.StringValue(result.Schema)
-	m.PrivacyPolicy = types.StringPointerValue(result.PrivacyPolicy)
-	m.CustomDisclaimer = types.StringPointerValue(result.CustomDisclaimer)
-	m.Labels = stringTypes(result.Labels)
-	m.Tools = stringTypes(result.Tools)
+	m.PrivacyPolicy = optionalString(result.PrivacyPolicy)
+	m.CustomDisclaimer = optionalString(result.CustomDisclaimer)
+	if m.Labels != nil && len(result.Labels) > 0 {
+		m.Labels = stringTypes(result.Labels)
+	}
+	m.Tools = stringList(result.Tools)
 }
 
 // stringValues converts []types.String to []string.
@@ -192,6 +194,24 @@ func stringTypes(values []string) []types.String {
 		out = append(out, types.StringValue(v))
 	}
 	return out
+}
+
+// stringList converts []string to a string-element types.List.
+func stringList(values []string) types.List {
+	elems := make([]attr.Value, 0, len(values))
+	for _, v := range values {
+		elems = append(elems, types.StringValue(v))
+	}
+	return types.ListValueMust(types.StringType, elems)
+}
+
+// optionalString normalizes a server string pointer for an Optional attribute:
+// nil or empty means unset, which state records as null to match the plan.
+func optionalString(s *string) types.String {
+	if s == nil || *s == "" {
+		return types.StringNull()
+	}
+	return types.StringValue(*s)
 }
 
 func (r *APIToolProviderResource) Create(ctx context.Context, req resource.CreateRequest, resp *resource.CreateResponse) {

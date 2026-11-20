@@ -42,7 +42,7 @@ type MCPProviderResourceModel struct {
 	Headers          types.Map      `tfsdk:"headers"`
 	Timeout          types.Float64  `tfsdk:"timeout"`
 	SSEReadTimeout   types.Float64  `tfsdk:"sse_read_timeout"`
-	Tools            []types.String `tfsdk:"tools"`
+	Tools            types.List     `tfsdk:"tools"`
 }
 
 func (r *MCPProviderResource) Metadata(ctx context.Context, req resource.MetadataRequest, resp *resource.MetadataResponse) {
@@ -184,18 +184,18 @@ func (m *MCPProviderResourceModel) applyResult(result *MCPProvider) {
 		m.Timeout = types.Float64Value(result.Configuration.Timeout)
 		m.SSEReadTimeout = types.Float64Value(result.Configuration.SSEReadTimeout)
 	}
-	m.Tools = stringTypes(result.Tools)
+	m.Tools = stringList(result.Tools)
 }
 
 // syncTools records the provider's tools, refreshing once when the write came
 // back without any (the server fetches tools best-effort on create/update).
 func (r *MCPProviderResource) syncTools(ctx context.Context, data *MCPProviderResourceModel) error {
-	if len(data.Tools) == 0 {
+	if data.Tools.IsNull() || len(data.Tools.Elements()) == 0 {
 		result, err := r.client.RefreshMCPProvider(ctx, data.ID.ValueString())
 		if err != nil {
 			return fmt.Errorf("unable to refresh MCP provider tools: %s", err)
 		}
-		data.Tools = stringTypes(result.Tools)
+		data.Tools = stringList(result.Tools)
 	}
 	return nil
 }

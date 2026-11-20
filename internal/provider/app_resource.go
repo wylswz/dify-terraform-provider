@@ -83,6 +83,9 @@ var appModesWithDrafts = appModesSupportingOverwrite
 // workflow and advanced-chat apps, so for every other mode a changed attribute
 // can only take effect through delete + create.
 func requireReplaceForNonWorkflowApps(ctx context.Context, req planmodifier.StringRequest, resp *stringplanmodifier.RequiresReplaceIfFuncResponse) {
+	if req.State.Raw.IsNull() {
+		return
+	}
 	var state AppResourceModel
 	resp.Diagnostics.Append(req.State.Get(ctx, &state)...)
 	if resp.Diagnostics.HasError() {
@@ -285,6 +288,11 @@ func writeOverrideFlags(ctx context.Context, private privateStateWriter, overrid
 // not serve. mode is computed, so the warning fires only once state knows it;
 // on create of a non-graph mode the call is skipped silently.
 func (r *AppResource) ModifyPlan(ctx context.Context, req resource.ModifyPlanRequest, resp *resource.ModifyPlanResponse) {
+	// Plan is null on destroy; state is null on create. Either way there is no
+	// known mode to warn about.
+	if req.Plan.Raw.IsNull() || req.State.Raw.IsNull() {
+		return
+	}
 	var plan, state AppResourceModel
 	resp.Diagnostics.Append(req.Plan.Get(ctx, &plan)...)
 	resp.Diagnostics.Append(req.State.Get(ctx, &state)...)
