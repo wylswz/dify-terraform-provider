@@ -260,8 +260,11 @@ data "dify_tools" "weather_brief" {
 
 locals {
   # one() fails loudly on zero or several matches instead of rendering a broken DSL.
+  # query is a substring match, so match the exact provider name inside node_data
+  # to ignore look-alike providers (e.g. lc_open_meteo_v2).
   open_meteo_node = jsondecode(one(
-    [for t in data.dify_tools.open_meteo.tools : t.node_data if t.provider_type == "api"],
+    [for t in data.dify_tools.open_meteo.tools : t.node_data
+    if t.provider_type == "api" && jsondecode(t.node_data).provider_name == dify_api_tool_provider.open_meteo.name],
   ))
   mcp_tool_nodes = [for t in data.dify_tools.deepwiki.tools : jsondecode(t.node_data)]
   workflow_tool_nodes = [
