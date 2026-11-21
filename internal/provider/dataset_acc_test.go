@@ -19,21 +19,6 @@ import (
 func TestAccDatasetLifecycle(t *testing.T) {
 	host, token := accEnv(t)
 
-	// The dataset/document routes under /openapi/v1 are newer than the pinned
-	// acceptance stack; skip cleanly when the server does not ship them.
-	probe := NewDifyClient(host, token, "")
-	probeWorkspace, err := resolveWorkspaceID(context.Background(), probe, "")
-	if err != nil {
-		t.Fatalf("resolving workspace: %v", err)
-	}
-	probe.WorkspaceID = probeWorkspace
-	if _, err := probe.ListDatasetIDs(context.Background()); err != nil {
-		if isNotFound(err) {
-			t.Skip("server does not expose /openapi/v1 datasets endpoints")
-		}
-		t.Fatalf("probing datasets endpoint: %v", err)
-	}
-
 	cliConfig, scratch := buildProviderMirror(t)
 	env := terraformEnv(cliConfig)
 	ctx := context.Background()
