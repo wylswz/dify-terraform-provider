@@ -18,6 +18,9 @@
 # Environment:
 #   DIFY_ACCEPTANCE_NGINX_PORT  host port for nginx (default: first free port)
 #   DIFY_ACCEPTANCE_KEEP=1      keep the stack running after the script exits
+#   DIFY_ACCEPTANCE_COMPOSE_OVERRIDE  path to a docker-compose override file
+#                               copied into the scratch stack (e.g. to
+#                               bind-mount a locally built /openapi/v1 backend)
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -141,6 +144,14 @@ fi
 	echo "EXPOSE_NGINX_SSL_PORT=$(free_port)"
 	echo "EXPOSE_PLUGIN_DEBUGGING_PORT=$(free_port)"
 } >> "$scratch/docker/.env"
+
+# Optional compose override (e.g. bind-mounting a backend checkout that adds
+# /openapi/v1 endpoints the pinned images do not ship).
+if [ -n "${DIFY_ACCEPTANCE_COMPOSE_OVERRIDE:-}" ]; then
+	cp "$DIFY_ACCEPTANCE_COMPOSE_OVERRIDE" "$scratch/docker/docker-compose.override.yaml"
+	echo "==> compose override applied: $DIFY_ACCEPTANCE_COMPOSE_OVERRIDE"
+fi
+
 export DIFY_HOST="http://127.0.0.1:$port"
 echo "==> nginx host port: $port"
 
