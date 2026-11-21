@@ -1,0 +1,113 @@
+app:
+  description: Acceptance test dataset retrieval workflow
+  icon: 📚
+  icon_background: '#E4E7FF'
+  icon_type: emoji
+  mode: workflow
+  name: tfacc-dataset-retrieval
+  use_icon_as_answer_icon: false
+dependencies: []
+kind: app
+version: 0.7.0
+workflow:
+  conversation_variables: []
+  environment_variables: []
+  features: {}
+  graph:
+    edges:
+    - data:
+        sourceType: start
+        targetType: knowledge-retrieval
+      id: start-retrieval
+      source: start
+      sourceHandle: source
+      target: retrieval
+      targetHandle: target
+      type: custom
+    - data:
+        sourceType: knowledge-retrieval
+        targetType: end
+      id: retrieval-end
+      source: retrieval
+      sourceHandle: source
+      target: end
+      targetHandle: target
+      type: custom
+    nodes:
+    - data:
+        desc: ''
+        selected: false
+        title: START
+        type: start
+        variables:
+        - label: Query
+          max_length: 4000
+          options: []
+          required: true
+          type: paragraph
+          variable: query
+      height: 116
+      id: start
+      position:
+        x: 50
+        y: 282
+      positionAbsolute:
+        x: 50
+        y: 282
+      sourcePosition: right
+      targetPosition: left
+      type: custom
+      width: 242
+    - data:
+        dataset_ids:
+        - ${dataset_id}
+        desc: ''
+        multiple_retrieval_config:
+          reranking_enable: false
+          top_k: 3
+        query_variable_selector:
+        - start
+        - query
+        retrieval_mode: multiple
+        selected: false
+        title: KNOWLEDGE RETRIEVAL
+        type: knowledge-retrieval
+      height: 116
+      id: retrieval
+      position:
+        x: 400
+        y: 282
+      positionAbsolute:
+        x: 400
+        y: 282
+      sourcePosition: right
+      targetPosition: left
+      type: custom
+      width: 242
+    - data:
+        desc: ''
+        outputs:
+        - value_selector:
+          - retrieval
+          - result
+          value_type: array[object]
+          variable: result
+        selected: false
+        title: END
+        type: end
+      height: 88
+      id: end
+      position:
+        x: 750
+        y: 282
+      positionAbsolute:
+        x: 750
+        y: 282
+      sourcePosition: right
+      targetPosition: left
+      type: custom
+      width: 242
+    viewport:
+      x: 0
+      y: 0
+      zoom: 1

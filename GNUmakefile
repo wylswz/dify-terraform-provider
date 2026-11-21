@@ -42,7 +42,7 @@ test:
 # and fail (never silently skip) without live DIFY_HOST / DIFY_TOKEN.
 # scripts/dify-acceptance.sh boots a pinned upstream Dify and sets these.
 testacc:
-	TF_ACC=1 go test -v -count=1 -timeout=20m -run '^(TestAccAppLifecycle|TestAccTools|TestAccAppCreatePartialFailure)$$' ./internal/provider
+	TF_ACC=1 go test -v -count=1 -timeout=20m -run '^(TestAccAppLifecycle|TestAccTools|TestAccAppCreatePartialFailure|TestAccDatasetLifecycle)$$' ./internal/provider
 
 # Full parity run of examples/complete: additionally needs TF_ACC_COMPLETE=1
 # plus OPENAI_API_KEY / TAVILY_API_KEY (and optionally MCP_SERVER_URL).
