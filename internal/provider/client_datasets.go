@@ -170,7 +170,7 @@ type documentListResponse struct {
 	Data    []Document `json:"data"`
 }
 
-// DocumentCreateRequest is the payload for POST /datasets/{dataset_id}/document/create-by-text.
+// DocumentCreateRequest is the payload for POST /datasets/{dataset_id}/documents:createByText.
 type DocumentCreateRequest struct {
 	Name                   string           `json:"name"`
 	Text                   string           `json:"text"`
@@ -183,7 +183,7 @@ type DocumentCreateRequest struct {
 	EmbeddingModelProvider *string          `json:"embedding_model_provider,omitempty"`
 }
 
-// DocumentUpdateRequest is the payload for POST /datasets/{dataset_id}/documents/{document_id}/update-by-text.
+// DocumentUpdateRequest is the payload for POST /datasets/{dataset_id}/documents/{document_id}:updateByText.
 type DocumentUpdateRequest struct {
 	Name           *string          `json:"name,omitempty"`
 	Text           *string          `json:"text,omitempty"`
@@ -202,7 +202,7 @@ type DocumentAndBatch struct {
 // CreateDocument creates a document from text (200 with document + batch).
 func (c *DifyClient) CreateDocument(ctx context.Context, datasetID string, req DocumentCreateRequest) (*DocumentAndBatch, error) {
 	var result DocumentAndBatch
-	if err := c.doJSON(ctx, http.MethodPost, c.workspaceURL("/datasets/"+url.PathEscape(datasetID)+"/document/create-by-text"), req, &result); err != nil {
+	if err := c.doJSON(ctx, http.MethodPost, c.workspaceURL("/datasets/"+url.PathEscape(datasetID)+"/documents:createByText"), req, &result); err != nil {
 		return nil, err
 	}
 	return &result, nil
@@ -220,7 +220,7 @@ func (c *DifyClient) GetDocument(ctx context.Context, datasetID, documentID stri
 // UpdateDocument updates a document's text/config by id within a dataset.
 func (c *DifyClient) UpdateDocument(ctx context.Context, datasetID, documentID string, req DocumentUpdateRequest) (*DocumentAndBatch, error) {
 	var result DocumentAndBatch
-	if err := c.doJSON(ctx, http.MethodPost, c.workspaceURL("/datasets/"+url.PathEscape(datasetID)+"/documents/"+url.PathEscape(documentID)+"/update-by-text"), req, &result); err != nil {
+	if err := c.doJSON(ctx, http.MethodPost, c.workspaceURL("/datasets/"+url.PathEscape(datasetID)+"/documents/"+url.PathEscape(documentID)+":updateByText"), req, &result); err != nil {
 		return nil, err
 	}
 	return &result, nil
@@ -252,7 +252,7 @@ func (c *DifyClient) ListDocuments(ctx context.Context, datasetID string) ([]Doc
 	}
 }
 
-// DocumentIndexingStatus is the response of GET /documents/<batch>/indexing-status.
+// DocumentIndexingStatus is the response of GET /datasets/{dataset_id}/document-batches/<batch>.
 type DocumentIndexingStatus struct {
 	Batch          string `json:"batch"`
 	IndexingStatus string `json:"indexing_status"`
@@ -262,7 +262,7 @@ type DocumentIndexingStatus struct {
 // GetDocumentIndexingStatus returns the indexing status of a document batch.
 func (c *DifyClient) GetDocumentIndexingStatus(ctx context.Context, datasetID, batch string) (*DocumentIndexingStatus, error) {
 	var result DocumentIndexingStatus
-	if err := c.doJSON(ctx, http.MethodGet, c.workspaceURL("/datasets/"+url.PathEscape(datasetID)+"/documents/"+url.PathEscape(batch)+"/indexing-status"), nil, &result); err != nil {
+	if err := c.doJSON(ctx, http.MethodGet, c.workspaceURL("/datasets/"+url.PathEscape(datasetID)+"/document-batches/"+url.PathEscape(batch)), nil, &result); err != nil {
 		return nil, err
 	}
 	return &result, nil
