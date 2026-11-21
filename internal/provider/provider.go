@@ -130,6 +130,9 @@ func (p *DifyProvider) Resources(ctx context.Context) []func() resource.Resource
 		NewAPIToolProviderResource,
 		NewMCPProviderResource,
 		NewWorkflowToolResource,
+		NewDatasetResource,
+		NewDocumentResource,
+		NewDocumentIndexingWaitResource,
 	}
 }
 
