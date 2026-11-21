@@ -395,4 +395,3 @@ func (r *DocumentResource) ImportState(ctx context.Context, req resource.ImportS
 	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("dataset_id"), datasetID)...)
 	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("id"), documentID)...)
 }
-
