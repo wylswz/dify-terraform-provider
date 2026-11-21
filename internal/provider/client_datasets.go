@@ -144,7 +144,6 @@ type Document struct {
 	CreatedBy            string          `json:"created_by"`
 	CreatedAt            int64           `json:"created_at"`
 	Tokens               int             `json:"tokens"`
-	IndexingStatus       string          `json:"indexing_status"`
 	CompletedAt          *int64          `json:"completed_at"`
 	UpdatedAt            int64           `json:"updated_at"`
 	IndexingLatency      float64         `json:"indexing_latency"`
@@ -254,9 +253,19 @@ func (c *DifyClient) ListDocuments(ctx context.Context, datasetID string) ([]Doc
 
 // DocumentIndexingStatus is the response of GET /datasets/{dataset_id}/document-batches/<batch>.
 type DocumentIndexingStatus struct {
-	Batch          string `json:"batch"`
-	IndexingStatus string `json:"indexing_status"`
-	Error          string `json:"error"`
+	Batch         string                `json:"batch"`
+	DisplayStatus string                `json:"display_status"`
+	Error         string                `json:"error"`
+	Documents     []DocumentBatchStatus `json:"documents"`
+}
+
+// DocumentBatchStatus is one row of a document batch's indexing status.
+type DocumentBatchStatus struct {
+	ID                string `json:"id"`
+	DisplayStatus     string `json:"display_status"`
+	Error             string `json:"error"`
+	CompletedSegments *int   `json:"completed_segments"`
+	TotalSegments     *int   `json:"total_segments"`
 }
 
 // GetDocumentIndexingStatus returns the indexing status of a document batch.
@@ -266,6 +275,15 @@ func (c *DifyClient) GetDocumentIndexingStatus(ctx context.Context, datasetID, b
 		return nil, err
 	}
 	return &result, nil
+}
+
+// indexingStatus maps the API's public display status onto the Terraform
+// attribute's historical vocabulary, where an indexing failure is "failed".
+func indexingStatus(displayStatus string) string {
+	if displayStatus == "error" {
+		return "failed"
+	}
+	return displayStatus
 }
 
 // WaitForDocumentIndexing blocks until the document's indexing reaches
@@ -278,7 +296,7 @@ func (c *DifyClient) WaitForDocumentIndexing(ctx context.Context, datasetID, doc
 			return nil, err
 		}
 
-		switch doc.IndexingStatus {
+		switch indexingStatus(doc.DisplayStatus) {
 		case "available":
 			return doc, nil
 		case "failed":

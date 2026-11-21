@@ -123,7 +123,7 @@ func (r *DocumentIndexingWaitResource) Create(ctx context.Context, req resource.
 		return
 	}
 
-	data.IndexingStatus = types.StringValue(doc.IndexingStatus)
+	data.IndexingStatus = types.StringValue(indexingStatus(doc.DisplayStatus))
 	data.IndexingError = types.StringValue(doc.Error)
 	if doc.CompletedAt != nil {
 		data.CompletedAt = types.Int64Value(*doc.CompletedAt)
@@ -151,7 +151,7 @@ func (r *DocumentIndexingWaitResource) Read(ctx context.Context, req resource.Re
 		return
 	}
 
-	data.IndexingStatus = types.StringValue(doc.IndexingStatus)
+	data.IndexingStatus = types.StringValue(indexingStatus(doc.DisplayStatus))
 	data.IndexingError = types.StringValue(doc.Error)
 	if doc.CompletedAt != nil {
 		data.CompletedAt = types.Int64Value(*doc.CompletedAt)
@@ -179,7 +179,7 @@ func (r *DocumentIndexingWaitResource) Update(ctx context.Context, req resource.
 		return
 	}
 
-	data.IndexingStatus = types.StringValue(doc.IndexingStatus)
+	data.IndexingStatus = types.StringValue(indexingStatus(doc.DisplayStatus))
 	data.IndexingError = types.StringValue(doc.Error)
 	if doc.CompletedAt != nil {
 		data.CompletedAt = types.Int64Value(*doc.CompletedAt)

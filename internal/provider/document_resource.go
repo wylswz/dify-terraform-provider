@@ -149,7 +149,7 @@ func (r *DocumentResource) Schema(ctx context.Context, req resource.SchemaReques
 				Default:             int64default.StaticInt64(3),
 			},
 			"indexing_status": schema.StringAttribute{
-				MarkdownDescription: "Current indexing status (`initial`, `parsing`, `indexing`, `available`, `failed`).",
+				MarkdownDescription: "Current document status (`queuing`, `indexing`, `paused`, `available`, `failed`, `disabled`, `archived`).",
 				Computed:            true,
 			},
 			"indexing_error": schema.StringAttribute{
@@ -256,7 +256,7 @@ func (m *DocumentResourceModel) applyResult(result *Document) {
 	m.ID = types.StringValue(result.ID)
 	m.DatasetID = types.StringValue(result.DatasetID)
 	m.Name = types.StringValue(result.Name)
-	m.IndexingStatus = types.StringValue(result.IndexingStatus)
+	m.IndexingStatus = types.StringValue(indexingStatus(result.DisplayStatus))
 	m.IndexingError = types.StringValue(result.Error)
 	m.Enabled = types.BoolValue(result.Enabled)
 	m.Archived = types.BoolValue(result.Archived)

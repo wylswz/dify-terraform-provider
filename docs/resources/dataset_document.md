@@ -72,7 +72,7 @@ resource "dify_dataset_document_indexing_wait" "wait" {
 - `enabled` (Boolean) Whether the document is enabled for retrieval.
 - `id` (String) Document ID (assigned by Dify).
 - `indexing_error` (String) Indexing error message when status is `failed`.
-- `indexing_status` (String) Current indexing status (`initial`, `parsing`, `indexing`, `available`, `failed`).
+- `indexing_status` (String) Current document status (`queuing`, `indexing`, `paused`, `available`, `failed`, `disabled`, `archived`).
 - `updated_at` (Number) Unix seconds when the document was last updated.
 
 ## Import
