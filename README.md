@@ -1,6 +1,10 @@
 > This is a demo project
 # Dify Terraform Provider (Unofficial)
 
+<p align="center">
+  <img src="img/cover.png" alt="Dify Terraform Provider — AI apps, credentials, plugins & keys as code">
+</p>
+
 [![Tests](https://github.com/wylswz/dify-unofficial-terraform-provider/actions/workflows/test.yml/badge.svg)](https://github.com/wylswz/dify-unofficial-terraform-provider/actions/workflows/test.yml)
 [![Go Report Card](https://goreportcard.com/badge/github.com/wylswz/dify-unofficial-terraform-provider)](https://goreportcard.com/report/github.com/wylswz/dify-unofficial-terraform-provider)
 [![License: MIT](https://img.shields.io/badge/License-MIT-brightgreen.svg)](LICENSE)
