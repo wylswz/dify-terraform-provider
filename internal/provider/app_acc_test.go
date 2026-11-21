@@ -50,14 +50,36 @@ func copyAccScenario(t *testing.T, name, destination string) {
 		t.Fatalf("reading scenario %q: %v", name, err)
 	}
 	for _, e := range entries {
+		srcPath := filepath.Join(src, e.Name())
+		dstPath := filepath.Join(destination, e.Name())
 		if e.IsDir() {
+			if err := filepath.WalkDir(srcPath, func(path string, d os.DirEntry, err error) error {
+				if err != nil || d.IsDir() {
+					return err
+				}
+				rel, err := filepath.Rel(srcPath, path)
+				if err != nil {
+					return err
+				}
+				target := filepath.Join(dstPath, rel)
+				if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+					return err
+				}
+				data, err := os.ReadFile(path)
+				if err != nil {
+					return err
+				}
+				return os.WriteFile(target, data, 0o600)
+			}); err != nil {
+				t.Fatalf("copying scenario dir %s: %v", e.Name(), err)
+			}
 			continue
 		}
-		data, err := os.ReadFile(filepath.Join(src, e.Name()))
+		data, err := os.ReadFile(srcPath)
 		if err != nil {
 			t.Fatalf("reading scenario file %s: %v", e.Name(), err)
 		}
-		if err := os.WriteFile(filepath.Join(destination, e.Name()), data, 0o600); err != nil {
+		if err := os.WriteFile(dstPath, data, 0o600); err != nil {
 			t.Fatalf("copying scenario file %s: %v", e.Name(), err)
 		}
 	}
@@ -196,6 +218,13 @@ func buildProviderMirror(t *testing.T) (string, string) {
 func tfOutput(t *testing.T, ctx context.Context, dir string, env []string, key string) string {
 	t.Helper()
 	res := mustTF(t, ctx, dir, env, "output", "-raw", key)
+	return strings.TrimSpace(res.Stdout)
+}
+
+// tfOutputJSON returns the JSON encoding of a complex-typed output value.
+func tfOutputJSON(t *testing.T, ctx context.Context, dir string, env []string, key string) string {
+	t.Helper()
+	res := mustTF(t, ctx, dir, env, "output", "-json", key)
 	return strings.TrimSpace(res.Stdout)
 }
 
