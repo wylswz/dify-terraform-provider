@@ -10,7 +10,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/hashicorp/terraform-plugin-framework/diag"
 	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
@@ -397,14 +396,3 @@ func (r *DocumentResource) ImportState(ctx context.Context, req resource.ImportS
 	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("id"), documentID)...)
 }
 
-// Validate that retrieval_model and process_rule strings are valid JSON when set.
-func validateJSONString(val diag.Diagnostics, p path.Path, value types.String) diag.Diagnostics {
-	if value.IsNull() || value.IsUnknown() {
-		return val
-	}
-	var v any
-	if err := json.Unmarshal([]byte(value.ValueString()), &v); err != nil {
-		val.AddAttributeError(p, "Invalid JSON", fmt.Sprintf("%s must be valid JSON: %s", p, err))
-	}
-	return val
-}

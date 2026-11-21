@@ -8,7 +8,6 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"github.com/hashicorp/terraform-plugin-framework/diag"
 	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
@@ -336,14 +335,3 @@ func (r *DatasetResource) ImportState(ctx context.Context, req resource.ImportSt
 	resource.ImportStatePassthroughID(ctx, path.Root("id"), req, resp)
 }
 
-// Validate that the retrieval_model string is valid JSON when set.
-func validateRetrievalModel(val diag.Diagnostics, path path.Path, value types.String) diag.Diagnostics {
-	if value.IsNull() || value.IsUnknown() {
-		return val
-	}
-	var v any
-	if err := json.Unmarshal([]byte(value.ValueString()), &v); err != nil {
-		val.AddAttributeError(path, "Invalid retrieval_model JSON", fmt.Sprintf("retrieval_model must be valid JSON: %s", err))
-	}
-	return val
-}

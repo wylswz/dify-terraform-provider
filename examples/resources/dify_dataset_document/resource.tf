@@ -1,9 +1,9 @@
 # Create a knowledge base (dataset).
 resource "dify_dataset" "kb" {
-  name             = "My Knowledge Base"
-  description      = "Documents for RAG retrieval."
+  name               = "My Knowledge Base"
+  description        = "Documents for RAG retrieval."
   indexing_technique = "high_quality"
-  permission       = "all_team_members"
+  permission         = "all_team_members"
 }
 
 # Document content is sourced from a local file, so the knowledge base can be
@@ -19,9 +19,9 @@ resource "dify_dataset_document" "doc" {
 
 # Wait for the document's indexing to complete with a custom timeout.
 resource "dify_dataset_document_indexing_wait" "wait" {
-  dataset_id      = dify_dataset_document.doc.dataset_id
-  document_id     = dify_dataset_document.doc.id
-  timeout         = 600
+  dataset_id       = dify_dataset_document.doc.dataset_id
+  document_id      = dify_dataset_document.doc.id
+  timeout          = 600
   polling_interval = 5
 
   depends_on = [dify_dataset_document.doc]

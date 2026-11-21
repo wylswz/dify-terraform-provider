@@ -46,11 +46,11 @@ resource "dify_dataset_document" "docs" {
 }
 
 resource "dify_dataset_document_indexing_wait" "wait" {
-  for_each           = local.docs
-  dataset_id         = dify_dataset_document.docs[each.key].dataset_id
-  document_id        = dify_dataset_document.docs[each.key].id
-  timeout            = var.indexing_timeout
-  polling_interval   = 5
+  for_each         = local.docs
+  dataset_id       = dify_dataset_document.docs[each.key].dataset_id
+  document_id      = dify_dataset_document.docs[each.key].id
+  timeout          = var.indexing_timeout
+  polling_interval = 5
 
   depends_on = [dify_dataset_document.docs]
 }
